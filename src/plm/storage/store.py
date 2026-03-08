@@ -21,6 +21,7 @@ a different location on a Pi without changing code).
 import json
 import os
 import re
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -136,11 +137,18 @@ class JsonStore:
                 continue
             try:
                 projects.append(Project.model_validate_json(path.read_text("utf-8")))
-            except Exception:
-                # A corrupt file should never silently break the whole list.
-                # Log-and-skip rather than crash; the user can delete the bad file.
-                # (We don't use the logging module to keep dependencies minimal.)
-                pass
+            except Exception as exc:
+                # A corrupt file should never silently break the whole list,
+                # but it also shouldn't go completely unnoticed — the user
+                # deserves to know a project file is unreadable.
+                # warnings.warn() goes to stderr, which MCP clients surface in
+                # their logs and which is visible in the terminal for plm-web.
+                # In Chunk 6 the list_projects MCP tool can also include these
+                # warnings in its structured response for in-chat visibility.
+                warnings.warn(
+                    f"Skipping corrupt project file {path.name!r}: {exc}",
+                    stacklevel=2,
+                )
         # Primary sort: target_weekly_hours descending (most committed first).
         # Projects with no target fall to the end (float("-inf") sorts below
         # any real number when reverse=True).
@@ -225,6 +233,18 @@ class JsonStore:
             return []
         raw = json.loads(self._inbox_path.read_text("utf-8"))
         return [InboxNote.model_validate(item) for item in raw]
+
+    def add_inbox_note(self, note: InboxNote) -> None:
+        """
+        Append a single note to the inbox.
+
+        Convenience wrapper around get_inbox() + save_inbox() so MCP tools
+        don't have to repeat the read-append-write pattern themselves.
+        The full list is always written atomically — see save_inbox().
+        """
+        notes = self.get_inbox()
+        notes.append(note)
+        self.save_inbox(notes)
 
     def save_inbox(self, notes: list[InboxNote]) -> None:
         """
