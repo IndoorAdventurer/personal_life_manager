@@ -1,0 +1,9 @@
+{
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  // Tell Pyright/Pylance where to find the plm package (src layout)
+  "extraPaths": ["src"],
+  // Point to the system Python where all packages are installed
+  "venvPath": "/usr",
+  "pythonPath": "/usr/bin/python3"
+}
