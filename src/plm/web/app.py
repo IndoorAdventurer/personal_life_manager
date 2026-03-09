@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
+from plm.models.card import CardLog, KanbanCard
 from plm.models.inbox import InboxNote
 from plm.models.planning import TimeBlock, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
@@ -243,7 +244,29 @@ async def toggle_archive(
     return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
 
 
-# ── 7c. Kanban board stub (8b will replace this) ────────────────────────────
+@app.post("/projects/{project_id}/delete", name="delete_project")
+async def delete_project(
+    project_id: str,
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    # Require the project to be archived first — a two-step process that makes
+    # accidental permanent deletion much harder.
+    if not project.archived:
+        _flash(request, "Only archived projects can be deleted. Archive it first.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    store.delete_project(project_id)
+    _flash(request, f"Project \"{project.name}\" permanently deleted.", "success")
+    return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+
+# ── 7c. Kanban board (8b) ────────────────────────────────────────────────────
 
 @app.get("/projects/{project_id}", name="project_detail")
 async def project_detail(
@@ -251,9 +274,340 @@ async def project_detail(
     request: Request,
     _: None = Depends(require_auth),
 ) -> Response:
-    # Placeholder — sub-chunk 8b will implement the full Kanban board.
-    _flash(request, "Kanban board coming in sub-chunk 8b.", "info")
-    return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+    return _render(request, "board.html", {"project": project})
+
+
+@app.post("/projects/{project_id}/cards", name="create_card")
+async def create_card(
+    project_id: str,
+    request: Request,
+    col_id: str = Form(...),
+    # Form("") rather than Form(...): FastAPI validates before our handler runs,
+    # so Form(...) with an empty submission returns a raw 422 JSON instead of
+    # our friendly flash message.  Defaulting to "" lets our handler own the
+    # validation and redirect back with a human-readable error.
+    name: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    col = next((c for c in project.board.columns if c.id == col_id), None)
+    if col is None:
+        _flash(request, "Column not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    name_stripped = name.strip()
+    if not name_stripped:
+        _flash(request, "Card name cannot be empty.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    col.cards.append(KanbanCard(name=name_stripped))
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/cards/{card_id}/edit", name="edit_card")
+async def edit_card(
+    project_id: str,
+    card_id: str,
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    estimated_workload: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    result = project.board.find_card(card_id)
+    if result is None:
+        _flash(request, "Card not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    _col, card = result
+    card.name = name.strip() or card.name   # keep old name if submitted blank
+    card.description = description.strip()
+    # Empty string → no workload estimate; otherwise store as-is (free text)
+    card.estimated_workload = estimated_workload.strip() or None
+    card.updated_at = datetime.now(timezone.utc)
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/cards/{card_id}/log", name="add_card_log")
+async def add_card_log(
+    project_id: str,
+    card_id: str,
+    request: Request,
+    message: str = Form(""),  # see create_card for why Form("") not Form(...)
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    result = project.board.find_card(card_id)
+    if result is None:
+        _flash(request, "Card not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    _col, card = result
+    msg = message.strip()
+    if not msg:
+        _flash(request, "Log message cannot be empty.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+    if msg:
+        card.logs.append(CardLog(message=msg))
+        card.updated_at = datetime.now(timezone.utc)
+        store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/cards/{card_id}/move", name="move_card")
+async def move_card(
+    project_id: str,
+    card_id: str,
+    request: Request,
+    target_col_id: str = Form(...),
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    try:
+        project.board.move_card(card_id, target_col_id)
+    except ValueError as exc:
+        _flash(request, str(exc), "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/cards/{card_id}/delete", name="delete_card")
+async def delete_card(
+    project_id: str,
+    card_id: str,
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    result = project.board.find_card(card_id)
+    if result is None:
+        _flash(request, "Card not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    col, card = result
+    col.cards.remove(card)
+    store.save_project(project)
+    _flash(request, f"Card \"{card.name}\" deleted.", "success")
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/columns", name="add_column")
+async def add_column(
+    project_id: str,
+    request: Request,
+    name: str = Form(""),   # see create_card for why Form("") not Form(...)
+    is_wip_raw: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    name_stripped = name.strip()
+    if not name_stripped:
+        _flash(request, "Column name cannot be empty.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    # HTML checkboxes send "on" when checked; absent when unchecked
+    is_wip = is_wip_raw == "on"
+    project.board.add_column(name_stripped, is_wip=is_wip)
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/columns/{col_id}/rename", name="update_column")
+async def update_column(
+    project_id: str,
+    col_id: str,
+    request: Request,
+    name: str = Form(""),       # see create_card for why Form("") not Form(...)
+    is_wip_raw: str = Form(""), # checkbox: "on" when checked, "" when unchecked
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    col = next((c for c in project.board.columns if c.id == col_id), None)
+    if col is None:
+        _flash(request, "Column not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    new_is_wip = is_wip_raw == "on"
+
+    # Guard: unchecking the WIP flag on the last remaining WIP column would
+    # violate the board invariant enforced by KanbanBoard.require_wip_column.
+    if col.is_wip and not new_is_wip:
+        wip_cols = [c for c in project.board.columns if c.is_wip]
+        if len(wip_cols) == 1:
+            _flash(request, "Cannot remove WIP status from the last WIP column.", "error")
+            return RedirectResponse(
+                url=str(request.url_for("project_detail", project_id=project_id)),
+                status_code=303,
+            )
+
+    name_stripped = name.strip()
+    if name_stripped:
+        try:
+            project.board.rename_column(col_id, name_stripped)
+        except ValueError as exc:
+            _flash(request, str(exc), "error")
+            return RedirectResponse(
+                url=str(request.url_for("project_detail", project_id=project_id)),
+                status_code=303,
+            )
+
+    col.is_wip = new_is_wip
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/columns/{col_id}/reorder", name="reorder_column")
+async def reorder_column(
+    project_id: str,
+    col_id: str,
+    request: Request,
+    direction: str = Form(...),
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    cols = project.board.columns
+    idx = next((i for i, c in enumerate(cols) if c.id == col_id), None)
+    if idx is None:
+        _flash(request, "Column not found.", "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    # Swap with neighbour; silently do nothing if already at the edge
+    if direction == "left" and idx > 0:
+        cols[idx], cols[idx - 1] = cols[idx - 1], cols[idx]
+    elif direction == "right" and idx < len(cols) - 1:
+        cols[idx], cols[idx + 1] = cols[idx + 1], cols[idx]
+
+    store.save_project(project)
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
+
+
+@app.post("/projects/{project_id}/columns/{col_id}/delete", name="delete_column")
+async def delete_column(
+    project_id: str,
+    col_id: str,
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    project = store.get_project(project_id)
+    if project is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+
+    col = next((c for c in project.board.columns if c.id == col_id), None)
+    col_name = col.name if col else "Column"
+
+    try:
+        # force=False: raises ValueError if the column still has cards,
+        # so the user is prompted to move them first rather than silently losing data
+        project.board.remove_column(col_id, force=False)
+    except ValueError as exc:
+        _flash(request, str(exc), "error")
+        return RedirectResponse(
+            url=str(request.url_for("project_detail", project_id=project_id)),
+            status_code=303,
+        )
+
+    store.save_project(project)
+    _flash(request, f"Column \"{col_name}\" deleted.", "success")
+    return RedirectResponse(
+        url=str(request.url_for("project_detail", project_id=project_id)),
+        status_code=303,
+    )
 
 
 # ── 7d. Planning stub (8c will replace this) ────────────────────────────────

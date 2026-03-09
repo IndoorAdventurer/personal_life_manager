@@ -1,0 +1,544 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} — PLM{% endblock %}
+
+{% block extra_style %}
+/* ── Board layout overrides ── */
+/* The board needs full horizontal width, not the 1100px cap from base.html */
+main { max-width: none; padding: 1.25rem; }
+
+/* ── Board header ── */
+.board-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.board-header h1 { margin-bottom: 0; }
+.board-header .back-link {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+.board-header .back-link:hover { color: #2563eb; }
+
+/* ── Board container — horizontal scroll when many columns ── */
+.board {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 1rem;
+}
+
+/* ── Column ── */
+.board-col {
+  flex: 0 0 270px;   /* fixed width so columns don't shrink on wide boards */
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  /* cap height so the column scrolls instead of pushing the page */
+  max-height: calc(100vh - 9rem);
+}
+/* Highlight a column when a card is dragged over it */
+.board-col.drag-over {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.col-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 8px 8px 0 0;
+  background: #f1f5f9;
+  /* Prevent the header from shrinking when the column is tall */
+  flex-shrink: 0;
+}
+.col-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #1e293b;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-count {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+/* ── Column actions (rename / delete) — live in a <details> ── */
+.col-actions-wrap {
+  position: relative;
+}
+/* Override base.html summary style for the "···" toggle */
+.col-actions-wrap > summary {
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  color: #94a3b8;
+  line-height: 1;
+}
+.col-actions-wrap > summary::before { content: none; }
+.col-actions-wrap[open] > summary { color: #475569; }
+.col-actions-wrap > summary:hover { color: #475569; background: #e2e8f0; }
+.col-actions-body {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.5rem;
+  z-index: 10;
+  min-width: 180px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.col-actions-body input[type=text] { width: 100%; }
+
+/* ── Cards scroll area ── */
+.col-cards {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* ── Draggable card wrapper ── */
+.kanban-card-wrap {
+  cursor: grab;
+  border-radius: 6px;
+}
+.kanban-card-wrap:active { cursor: grabbing; }
+/* Dim the card while it is being dragged */
+.kanban-card-wrap.dragging { opacity: 0.35; }
+
+/* ── Card <details> — the expand/collapse element ── */
+.kanban-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+/* summary is the always-visible card header line */
+.kanban-card > summary {
+  /* Override base.html summary chevron — we use our own indicator */
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+  color: #1e293b;
+  cursor: pointer;
+  user-select: none;
+}
+/* Suppress the base.html ::before chevron for both closed and open states.
+   We need the [open] variant because base.html has a higher-specificity rule
+   `details[open] > summary::before { content: "▼" }` that would otherwise
+   win over `.kanban-card > summary::before` when the card is expanded. */
+.kanban-card > summary::before,
+.kanban-card[open] > summary::before { content: none; }
+.kanban-card > summary::marker       { display: none; }
+.kanban-card > summary:hover { background: #f8fafc; }
+/* Expand indicator replacing the default browser triangle */
+.card-chevron {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  flex-shrink: 0;
+  transition: transform 0.1s;
+}
+.kanban-card[open] .card-chevron { transform: rotate(90deg); }
+.card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Small indicator badges on the card summary line */
+.card-indicator {
+  font-size: 0.7rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── Expanded card body ── */
+.card-body {
+  padding: 0.6rem;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+.card-section-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+}
+/* Log entry list */
+.log-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.log-entry {
+  font-size: 0.8rem;
+  color: #475569;
+  border-left: 2px solid #e2e8f0;
+  padding-left: 0.5rem;
+}
+.log-ts {
+  display: block;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+/* Workload estimate pill */
+.workload-pill {
+  display: inline-block;
+  font-size: 0.75rem;
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+/* Danger zone (delete card) */
+.card-danger { border-top: 1px solid #fee2e2; padding-top: 0.5rem; }
+
+/* ── Add card form at the bottom of each column ── */
+.add-card-form {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border-top: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+.add-card-form input { flex: 1; min-width: 0; }
+
+/* ── Add column panel — sits at the right end of the board ── */
+.add-col-panel {
+  flex: 0 0 200px;
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 0.6rem;
+}
+.add-col-panel > summary {
+  font-size: 0.85rem;
+  color: #64748b;
+  padding: 0.25rem 0;
+}
+.add-col-panel > summary::before { content: none; }
+.add-col-panel .col-form { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.add-col-panel input[type=text] { width: 100%; }
+.add-col-panel .wip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #475569;
+}
+{% endblock %}
+
+{% block content %}
+<!-- ── Board header ── -->
+<div class="board-header">
+  <a href="{{ request.url_for('project_list') }}" class="back-link">← Projects</a>
+  <h1>{{ project.name }}</h1>
+  {% if project.description %}
+  <span class="text-muted">{{ project.description }}</span>
+  {% endif %}
+</div>
+
+<!-- ── Board ── -->
+<!--
+  data-project-url is read by the drag-and-drop JS below to construct card
+  move URLs without hard-coding a URL pattern in the script.
+-->
+<div class="board" id="board"
+     data-project-url="{{ request.url_for('project_detail', project_id=project.id) }}">
+
+  {% for col in project.board.columns %}
+  <!--
+    Each column is a drop target. ondragover must call preventDefault() to
+    signal that drops are accepted here; otherwise the ondrop never fires.
+  -->
+  <div class="board-col"
+       data-col-id="{{ col.id }}"
+       ondragover="event.preventDefault(); this.classList.add('drag-over')"
+       ondragleave="this.classList.remove('drag-over')"
+       ondrop="handleDrop(event, '{{ col.id }}')">
+
+    <!-- Column header -->
+    <div class="col-header">
+      <span class="col-name" title="{{ col.name }}">{{ col.name }}</span>
+      {% if col.is_wip %}<span class="badge wip">WIP</span>{% endif %}
+      <span class="col-count">{{ col.cards | length }}</span>
+
+      <!-- Column actions: rename + delete, tucked behind a "···" toggle -->
+      <details class="col-actions-wrap">
+        <summary title="Column actions">···</summary>
+        <div class="col-actions-body">
+          <!-- Rename + WIP toggle form -->
+          <form method="post"
+                action="{{ request.url_for('update_column', project_id=project.id, col_id=col.id) }}">
+            <div class="form-group">
+              <label style="font-size:0.75rem">Name</label>
+              <input type="text" name="name" value="{{ col.name }}" autocomplete="off">
+            </div>
+            <div style="display:flex; align-items:center; gap:0.35rem; margin-top:0.35rem">
+              <input type="checkbox" id="wip-{{ col.id }}" name="is_wip_raw" value="on"
+                     {% if col.is_wip %}checked{% endif %}
+                     onchange="this.form.submit()">
+              <label for="wip-{{ col.id }}" style="font-size:0.75rem; margin:0">WIP column</label>
+            </div>
+            <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:0.4rem; width:100%">
+              Save
+            </button>
+          </form>
+
+          <!-- Reorder buttons -->
+          <div style="display:flex; gap:0.3rem; margin-top:0.4rem">
+            <form method="post" style="flex:1"
+                  action="{{ request.url_for('reorder_column', project_id=project.id, col_id=col.id) }}">
+              <input type="hidden" name="direction" value="left">
+              <button type="submit" class="btn btn-secondary btn-sm" style="width:100%">&#8592; Left</button>
+            </form>
+            <form method="post" style="flex:1"
+                  action="{{ request.url_for('reorder_column', project_id=project.id, col_id=col.id) }}">
+              <input type="hidden" name="direction" value="right">
+              <button type="submit" class="btn btn-secondary btn-sm" style="width:100%">Right &#8594;</button>
+            </form>
+          </div>
+
+          <!-- Delete form — only works when the column is empty -->
+          <form method="post" style="margin-top:0.4rem"
+                action="{{ request.url_for('delete_column', project_id=project.id, col_id=col.id) }}"
+                onsubmit="return confirm('Delete column &quot;{{ col.name }}&quot;? This only works if the column is empty.')">
+            <button type="submit" class="btn btn-danger btn-sm" style="width:100%">
+              Delete column
+            </button>
+          </form>
+        </div>
+      </details>
+    </div>
+
+    <!-- Cards -->
+    <div class="col-cards">
+      {% for card in col.cards %}
+      <!--
+        The outer div is the drag handle. Wrapping <details> in a draggable div
+        keeps drag events and click-to-expand independent — the browser treats
+        them as separate interactions.
+      -->
+      <div class="kanban-card-wrap"
+           draggable="true"
+           data-card-id="{{ card.id }}"
+           ondragstart="handleDragStart(event)"
+           ondragend="this.classList.remove('dragging')">
+
+        <details class="kanban-card">
+          <summary>
+            <span class="card-chevron">&#9654;</span>
+            <span class="card-title" title="{{ card.name }}">{{ card.name }}</span>
+            {% if card.estimated_workload %}
+            <span class="card-indicator">{{ card.estimated_workload }}</span>
+            {% endif %}
+            {% if card.description %}
+            <span class="card-indicator" title="Has description">&#128203;</span>
+            {% endif %}
+            {% if card.logs %}
+            <span class="card-indicator">{{ card.logs | length }} log</span>
+            {% endif %}
+          </summary>
+
+          <!-- Expanded card body -->
+          <div class="card-body">
+
+            <!-- Edit form -->
+            <form method="post"
+                  action="{{ request.url_for('edit_card', project_id=project.id, card_id=card.id) }}">
+              <div class="form-group" style="margin-bottom:0.35rem">
+                <label>Title</label>
+                <input type="text" name="name" value="{{ card.name }}" required autocomplete="off"
+                       style="width:100%">
+              </div>
+              <div class="form-group" style="margin-bottom:0.35rem">
+                <label>Description</label>
+                <textarea name="description" rows="2" style="width:100%">{{ card.description }}</textarea>
+              </div>
+              <div class="form-group" style="margin-bottom:0.35rem">
+                <label>Estimate</label>
+                <input type="text" name="estimated_workload" autocomplete="off"
+                       placeholder="e.g. 2h, small"
+                       value="{{ card.estimated_workload if card.estimated_workload else '' }}"
+                       style="width:100%">
+              </div>
+              <button type="submit" class="btn btn-primary btn-sm">Save</button>
+            </form>
+
+            <!-- Move to column (mobile-friendly fallback; also useful on desktop) -->
+            <div>
+              <div class="card-section-label">Move to</div>
+              <form method="post"
+                    action="{{ request.url_for('move_card', project_id=project.id, card_id=card.id) }}"
+                    style="display:flex; gap:0.3rem">
+                <select name="target_col_id" style="flex:1; min-width:0">
+                  {% for c in project.board.columns %}
+                  <option value="{{ c.id }}"
+                          {% if c.id == col.id %}selected{% endif %}>{{ c.name }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-secondary btn-sm">Move</button>
+              </form>
+            </div>
+
+            <!-- Log entries (newest first) -->
+            {% if card.logs %}
+            <div>
+              <div class="card-section-label">Log</div>
+              <ul class="log-list">
+                {% for entry in card.logs %}
+                <li class="log-entry">
+                  <span class="log-ts">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+                  {{ entry.message }}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+
+            <!-- Add log entry -->
+            <form method="post"
+                  action="{{ request.url_for('add_card_log', project_id=project.id, card_id=card.id) }}"
+                  style="display:flex; gap:0.3rem">
+              <input type="text" name="message" placeholder="Add log entry…"
+                     autocomplete="off" required style="flex:1; min-width:0">
+              <button type="submit" class="btn btn-secondary btn-sm">Add</button>
+            </form>
+
+            <!-- Delete card -->
+            <div class="card-danger">
+              <form method="post"
+                    action="{{ request.url_for('delete_card', project_id=project.id, card_id=card.id) }}"
+                    onsubmit="return confirm('Delete card &quot;{{ card.name }}&quot;?')">
+                <button type="submit" class="btn btn-danger btn-sm">Delete card</button>
+              </form>
+            </div>
+
+          </div>{# /card-body #}
+        </details>
+      </div>{# /kanban-card-wrap #}
+      {% endfor %}
+    </div>{# /col-cards #}
+
+    <!-- Add card form pinned to the bottom of the column -->
+    <form class="add-card-form" method="post"
+          action="{{ request.url_for('create_card', project_id=project.id) }}">
+      <input type="hidden" name="col_id" value="{{ col.id }}">
+      <input type="text" name="name" placeholder="+ Add card" autocomplete="off" required>
+      <button type="submit" class="btn btn-secondary btn-sm">Add</button>
+    </form>
+
+  </div>{# /board-col #}
+  {% endfor %}
+
+  <!-- Add column panel — always at the right end of the board -->
+  <details class="add-col-panel">
+    <summary>+ Add column</summary>
+    <form class="col-form" method="post"
+          action="{{ request.url_for('add_column', project_id=project.id) }}">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Column name" autocomplete="off" required>
+      </div>
+      <div class="wip-row">
+        <input type="checkbox" id="new-col-wip" name="is_wip_raw" value="on">
+        <label for="new-col-wip">Mark as WIP</label>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Add column</button>
+    </form>
+  </details>
+
+</div>{# /board #}
+{% endblock %}
+
+{% block scripts %}
+<script>
+/*
+ * Drag-and-drop for desktop.  Mobile users can use the "Move to" dropdown
+ * inside each expanded card instead.
+ *
+ * Design: we store the dragged card id in a module-level variable, then on
+ * drop we POST to the move endpoint and reload.  The move endpoint returns a
+ * 303 redirect back to the board, which fetch follows — after which we call
+ * location.reload() to refresh the page state.
+ */
+
+let _dragCardId = null;
+
+function handleDragStart(event) {
+  const wrap = event.currentTarget;
+  _dragCardId = wrap.dataset.cardId;
+  wrap.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+function handleDrop(event, targetColId) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+
+  if (!_dragCardId) return;
+  const cardId = _dragCardId;
+  _dragCardId = null;
+
+  // Build the move URL from the project base URL stored on the board element,
+  // so we don't need to hard-code a URL pattern in this script.
+  const projectUrl = document.getElementById('board').dataset.projectUrl;
+  const moveUrl = `${projectUrl}/cards/${cardId}/move`;
+
+  const body = new FormData();
+  body.append('target_col_id', targetColId);
+
+  fetch(moveUrl, { method: 'POST', body })
+    .then(() => location.reload());
+}
+
+/*
+ * Disable dragging while a card is expanded so that clicking inside input
+ * fields places the cursor at the clicked position rather than triggering
+ * a drag-start gesture.  Re-enable dragging when the card is collapsed.
+ */
+document.querySelectorAll('.kanban-card').forEach(details => {
+  details.addEventListener('toggle', () => {
+    const wrap = details.closest('.kanban-card-wrap');
+    if (wrap) wrap.draggable = !details.open;
+  });
+});
+</script>
+{% endblock %}

@@ -222,6 +222,10 @@
             <form method="post" action="{{ request.url_for('toggle_archive', project_id=p.id) }}" style="display:inline">
               <button type="submit" class="btn btn-secondary btn-sm">Unarchive</button>
             </form>
+            <form method="post" action="{{ request.url_for('delete_project', project_id=p.id) }}" style="display:inline"
+                  onsubmit="return confirm('Permanently delete &quot;{{ p.name }}&quot;? This cannot be undone.')">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
           </div>
         </div>
       </div>
