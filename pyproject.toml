@@ -14,6 +14,12 @@ dependencies = [
     "jinja2>=3.1.0",
     "pydantic>=2.0.0",
     "python-multipart>=0.0.12",
+    # itsdangerous: signs session cookies via SessionMiddleware (tamper-proof without
+    # a server-side session store; starlette pulls it in already, explicit pin for clarity)
+    "itsdangerous>=2.0",
+    # watchdog: file-system event watcher used by the SSE live-reload feature (8d).
+    # On Linux it uses inotify — zero polling, instant notifications.
+    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block title %}Projects — PLM{% endblock %}
+
+{% block extra_style %}
+.projects-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.projects-header h1 { margin-bottom: 0; }
+
+/* ── Create project form ── */
+.create-form {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.5rem;
+}
+.create-form h2 { margin-top: 0; margin-bottom: 0.75rem; }
+.create-form .form-row input[type=text] { width: 220px; }
+.create-form .form-row input[type=number] { width: 100px; }
+
+/* ── Project card ── */
+.project-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.project-card + .project-card { margin-top: 0.6rem; }
+
+.project-card-main {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.1rem;
+  flex-wrap: wrap;
+}
+.project-name {
+  font-weight: 600;
+  font-size: 0.975rem;
+  color: #0f172a;
+  flex: 0 0 auto;
+  min-width: 140px;
+}
+.project-name a { color: inherit; }
+.project-name a:hover { color: #2563eb; }
+.project-desc {
+  color: #64748b;
+  font-size: 0.85rem;
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-meta {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.775rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.badge.wip { color: #0369a1; background: #e0f2fe; border-color: #bae6fd; }
+.project-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* ── Inline edit form (in <details>) ── */
+.edit-form-wrap {
+  border-top: 1px solid #f1f5f9;
+  padding: 0.75rem 1.1rem;
+  background: #fafafa;
+}
+.edit-form-wrap summary {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  padding: 0;
+}
+.edit-form-wrap .form-row { margin-top: 0.6rem; }
+.edit-form-wrap input[type=text]   { width: 200px; }
+.edit-form-wrap input[type=number] { width: 90px; }
+
+/* ── Archived section ── */
+.archived-section { margin-top: 2rem; }
+.archived-summary {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+}
+.project-card.archived { opacity: 0.7; }
+{% endblock %}
+
+{% block content %}
+<div class="projects-header">
+  <h1>Projects</h1>
+</div>
+
+<!-- ── Create project form ── -->
+<div class="create-form">
+  <h2>New project</h2>
+  <form method="post" action="{{ request.url_for('create_project') }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new-name">Name *</label>
+        <input type="text" id="new-name" name="name" required placeholder="e.g. Home automation" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="new-desc">Description</label>
+        <input type="text" id="new-desc" name="description" placeholder="Optional short description" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="new-hours">Target hrs/week</label>
+        <input type="number" id="new-hours" name="target_weekly_hours" min="0" step="0.5" placeholder="e.g. 10">
+      </div>
+      <div class="form-group" style="justify-content: flex-end;">
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- ── Active projects ── -->
+{% if active %}
+  {% for p in active %}
+  <div class="project-card">
+    <div class="project-card-main">
+      <span class="project-name">
+        <a href="{{ request.url_for('project_detail', project_id=p.id) }}">{{ p.name }}</a>
+      </span>
+
+      {% if p.description %}
+      <span class="project-desc" title="{{ p.description }}">{{ p.description }}</span>
+      {% else %}
+      <span class="project-desc" style="font-style:italic; color:#b0bec5">No description</span>
+      {% endif %}
+
+      <div class="project-meta">
+        {% if p.target_weekly_hours is not none %}
+        <span class="badge">{{ p.target_weekly_hours|int if p.target_weekly_hours == p.target_weekly_hours|int else p.target_weekly_hours }} h/wk</span>
+        {% endif %}
+        <span class="badge wip">{{ wip_counts[p.id] }} WIP</span>
+      </div>
+
+      <div class="project-actions">
+        <a href="{{ request.url_for('project_detail', project_id=p.id) }}" class="btn btn-secondary btn-sm">Board</a>
+        <form method="post" action="{{ request.url_for('toggle_archive', project_id=p.id) }}" style="display:inline">
+          <button type="submit" class="btn btn-ghost btn-sm"
+                  onclick="return confirm('Archive &quot;{{ p.name }}&quot;?')">Archive</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Inline edit form — collapsed by default -->
+    <details class="edit-form-wrap">
+      <summary>Edit details</summary>
+      <form method="post" action="{{ request.url_for('edit_project', project_id=p.id) }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Name *</label>
+            <input type="text" name="name" value="{{ p.name }}" required autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" name="description" value="{{ p.description }}" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Target hrs/week</label>
+            <input type="number" name="target_weekly_hours" min="0" step="0.5"
+                   value="{{ p.target_weekly_hours if p.target_weekly_hours is not none else '' }}">
+          </div>
+          <div class="form-group" style="justify-content: flex-end;">
+            <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          </div>
+        </div>
+      </form>
+    </details>
+  </div>
+  {% endfor %}
+{% else %}
+  <p class="text-muted">No projects yet — create one above.</p>
+{% endif %}
+
+<!-- ── Archived projects (collapsed by default) ── -->
+{% if archived %}
+<div class="archived-section">
+  <details>
+    <summary class="archived-summary">Archived projects ({{ archived|length }})</summary>
+    <div class="mt-1">
+      {% for p in archived %}
+      <div class="project-card archived">
+        <div class="project-card-main">
+          <span class="project-name">{{ p.name }}</span>
+          {% if p.description %}
+          <span class="project-desc">{{ p.description }}</span>
+          {% endif %}
+          <div class="project-meta">
+            {% if p.target_weekly_hours is not none %}
+            <span class="badge">{{ p.target_weekly_hours }} h/wk</span>
+            {% endif %}
+          </div>
+          <div class="project-actions">
+            <form method="post" action="{{ request.url_for('toggle_archive', project_id=p.id) }}" style="display:inline">
+              <button type="submit" class="btn btn-secondary btn-sm">Unarchive</button>
+            </form>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endif %}
+
+{% endblock %}

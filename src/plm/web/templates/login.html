@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — PLM</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .login-box {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 2rem 2.25rem;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    h1 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle {
+      color: #64748b;
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+    }
+    .flash {
+      padding: 0.6rem 0.8rem;
+      font-size: 0.85rem;
+      border-left: 3px solid #dc2626;
+      background: #fef2f2;
+      color: #b91c1c;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: #64748b;
+      margin-bottom: 0.3rem;
+    }
+    input[type=password] {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 0.5rem 0.7rem;
+      font-size: 0.9rem;
+      background: #fff;
+      color: #1e293b;
+      font-family: inherit;
+    }
+    input[type=password]:focus {
+      outline: 2px solid #3b82f6;
+      outline-offset: 1px;
+      border-color: transparent;
+    }
+    button[type=submit] {
+      width: 100%;
+      margin-top: 1.1rem;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.55rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button[type=submit]:hover { background: #1d4ed8; }
+  </style>
+</head>
+<body>
+
+<div class="login-box">
+  <h1>PLM</h1>
+  <p class="subtitle">Personal Life Manager</p>
+
+  {% if flash %}
+  <div class="flash">{{ flash.message }}</div>
+  {% endif %}
+
+  <form method="post" action="{{ request.url_for('login_submit') }}">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+
+</body>
+</html>
