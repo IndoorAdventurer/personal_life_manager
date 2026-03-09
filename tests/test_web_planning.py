@@ -91,10 +91,12 @@ class TestPlanningGet:
         assert _WEEK in resp.text
 
     def test_missing_plan_shows_empty_state(self, client: TestClient) -> None:
-        """Week with no saved plan → all days show 'No blocks.' without erroring."""
+        """Week with no saved plan → page renders without errors (empty grid)."""
         resp = client.get(f"/planning?week={_WEEK}")
         assert resp.status_code == 200
-        assert "No blocks." in resp.text
+        # The week string and the chart empty-state message should both appear.
+        assert _WEEK in resp.text
+        assert "No time blocks planned" in resp.text
 
     def test_existing_blocks_displayed(self, client: TestClient, store: JsonStore) -> None:
         """Blocks saved in the store are rendered in the day list."""

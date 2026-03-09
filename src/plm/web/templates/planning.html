@@ -2,24 +2,18 @@
 {% block title %}Planning — {{ week }} — PLM{% endblock %}
 
 {% block extra_style %}
-/* ── Planning page ────────────────────────────────────────────────── */
+/* ── Planning page: widen the main container for the 7-column grid ───── */
+main { max-width: 1400px; }
 
-/* Week navigation bar */
+/* ── Week navigation ──────────────────────────────────────────────────── */
 .week-nav {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
   flex-wrap: wrap;
 }
-.week-nav h1 {
-  margin: 0;
-  flex: 1;
-  min-width: 0;      /* allow flex item to shrink below its content width */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.week-nav h1 { margin: 0; }
 .week-label-sub {
   display: block;
   font-size: 0.8rem;
@@ -28,49 +22,237 @@
   margin-top: 0.1rem;
 }
 
-/* Day sections */
-.day-section {
+/* ── Calendar grid ────────────────────────────────────────────────────── */
+/*
+ * Layout: a non-scrolling header row + a scrollable body.
+ * The body uses a flex row: a fixed-width time gutter on the left, then
+ * seven equal-width day columns.
+ *
+ * Key constant: --hour-px controls vertical scale.
+ * MUST stay in sync with _HOUR_PX = 60 in app.py.
+ */
+:root { --hour-px: 60; }
+
+.cal-outer {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
   margin-bottom: 1.25rem;
 }
-.day-section h2 {
-  text-transform: capitalize;
-  margin-bottom: 0.4rem;
+
+/* Sticky day-name header (not scrolled with the body) */
+.cal-head {
+  display: flex;
+  background: #f8fafc;
+  border-bottom: 2px solid #e2e8f0;
+  position: sticky;    /* keeps day names visible while scrolling horizontally */
+  top: 0;
+  z-index: 10;
+}
+.cal-gutter-head {
+  width: 3.5rem;
+  flex-shrink: 0;
+  border-right: 1px solid #e2e8f0;
+}
+.cal-day-head {
+  flex: 1;
+  text-align: center;
+  padding: 0.35rem 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #334155;
+  border-left: 1px solid #e2e8f0;
+  line-height: 1.3;
+}
+.cal-day-head .day-date {
+  display: block;
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+.cal-day-head.today-col {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.cal-day-head.today-col .day-date { color: #3b82f6; }
+
+/* Scrollable body: fixed height, shows ~10 hours */
+.cal-scroll {
+  height: 600px;
+  overflow-y: scroll;
+  overflow-x: hidden;
 }
 
-/* Block list table */
-.blocks-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
+/* Inner body: flex row, full 24-hour height */
+.cal-inner {
+  display: flex;
+  /* 24 × --hour-px = 1440 px.  Must match app.py _HOUR_PX × 24. */
+  height: calc(var(--hour-px) * 24);
+  position: relative;
 }
-.blocks-table td {
-  padding: 0.3rem 0.6rem;
-  vertical-align: middle;
-  border-bottom: 1px solid #f1f5f9;
-}
-.blocks-table tr:last-child td { border-bottom: none; }
-.block-time   { white-space: nowrap; color: #475569; font-variant-numeric: tabular-nums; width: 9rem; }
-.block-project { font-weight: 500; }
-.block-notes   { color: #64748b; }
-.block-actions { text-align: right; white-space: nowrap; width: 5rem; }
 
-/* Add block form */
-.add-block-form {
+/* Left column: hour labels */
+.cal-time-col {
+  width: 3.5rem;
+  flex-shrink: 0;
+  position: relative;
+  border-right: 1px solid #e2e8f0;
+}
+.cal-hour-label {
+  position: absolute;
+  right: 0.35rem;
+  font-size: 0.68rem;
+  color: #94a3b8;
+  /* Align the label with the TOP of the hour slot (conventional calendar style).
+     A small top offset keeps the text from touching the grid line itself. */
+  padding-top: 2px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Day columns */
+.cal-day-col {
+  flex: 1;
+  position: relative;
+  border-left: 1px solid #e2e8f0;
+  min-width: 0;    /* allow flex items to shrink below content width */
+}
+.cal-day-col.today-col { background: #fafcff; }
+
+/* Hour grid lines inside each day column */
+.cal-hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Major lines (every hour) are slightly more visible than minor ones */
+  border-top: 1px solid #f1f5f9;
+  pointer-events: none;
+}
+.cal-hour-line.major { border-color: #e2e8f0; }
+
+/* Time block chips */
+.cal-block {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 0.7rem;
+  overflow: hidden;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+  /* cursor: pointer will be upgraded to something interactive in 8c-3 */
+  cursor: default;
+  z-index: 1;
+}
+.cal-block-name {
+  font-weight: 600;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-block-time {
+  display: block;
+  opacity: 0.85;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.cal-block-notes {
+  display: block;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Bar chart ────────────────────────────────────────────────────────── */
+.chart-section {
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 1rem 1.1rem;
-  margin-top: 1.5rem;
+  margin-bottom: 1.25rem;
 }
-.add-block-form h2 { margin-top: 0; }
+.chart-section h2 { margin-top: 0; }
 
-/* Notes section */
+.chart-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+.chart-label {
+  width: 9rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.chart-bar-wrap {
+  flex: 1;
+  position: relative;
+  height: 1.1rem;
+  background: #f1f5f9;
+  border-radius: 4px;
+  /* overflow visible so the target marker can extend slightly above/below */
+  overflow: visible;
+}
+.chart-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;    /* always show a sliver even for tiny values */
+}
+/*
+ * Target marker: a thin vertical bar at the project's target_weekly_hours.
+ * Positioned via inline left% set in the template.
+ * The user-visible design is [||||||||||||  x  ] where x = target.
+ */
+.chart-target-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: #1e293b;
+  border-radius: 2px;
+  /* centre the 2-px bar on the computed percentage */
+  transform: translateX(-50%);
+}
+.chart-hours {
+  font-size: 0.8rem;
+  color: #64748b;
+  white-space: nowrap;
+  /* Fixed width + no shrink ensures every bar-wrap gets identical available space,
+     preventing the 1–2 px width discrepancy caused by varying label text length. */
+  width: 10rem;
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Add block form (collapsible) ────────────────────────────────────── */
+.add-block-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.25rem;
+}
+.add-block-section summary {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #334155;
+  padding: 0;
+}
+.add-block-section[open] summary { margin-bottom: 0.75rem; }
+
+/* ── Notes section ────────────────────────────────────────────────────── */
 .notes-section {
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 1rem 1.1rem;
-  margin-top: 1.25rem;
 }
 .notes-section h2 { margin-top: 0; }
 .notes-section textarea { width: 100%; }
@@ -91,45 +273,101 @@
   <a href="?week={{ next_week }}" class="btn btn-secondary btn-sm">Next →</a>
 </div>
 
-{# ── Time blocks by day ───────────────────────────────────────────────────── #}
-{% for day in days %}
-<div class="day-section">
-  <h2>{{ day | title }}</h2>
-  {% set day_blocks = blocks_by_day[day] %}
-  {% if day_blocks %}
-  <table class="blocks-table">
-    {% for block in day_blocks %}
-    <tr>
-      <td class="block-time">{{ block.start_time }} – {{ block.end_time }}</td>
-      <td class="block-project">
-        {% if block.project_id in project_map %}
-          {{ project_map[block.project_id].name }}
-        {% else %}
-          <span class="text-muted">(deleted project)</span>
-        {% endif %}
-      </td>
-      <td class="block-notes">{{ block.notes }}</td>
-      <td class="block-actions">
-        <form method="post"
-              action="{{ request.url_for('delete_block', block_id=block.id) }}"
-              style="display:inline">
-          <input type="hidden" name="week" value="{{ week }}">
-          <button type="submit" class="btn btn-danger btn-sm"
-                  title="Delete this block">✕</button>
-        </form>
-      </td>
-    </tr>
+{# ── Calendar grid ─────────────────────────────────────────────────────────── #}
+<div class="cal-outer">
+
+  {# Day name header row — not inside the scroll container so it stays fixed #}
+  <div class="cal-head">
+    <div class="cal-gutter-head"></div>
+    {% for day, date_str in day_headers %}
+    <div class="cal-day-head{% if today_day == day %} today-col{% endif %}">
+      {{ day[:3] | title }}{# "Mon", "Tue", … — first 3 chars #}
+      <span class="day-date">{{ date_str }}</span>
+    </div>
     {% endfor %}
-  </table>
+  </div>
+
+  {# Scrollable body — JS sets scrollTop on load to show midday #}
+  <div class="cal-scroll" id="cal-scroll">
+    <div class="cal-inner">
+
+      {# Hour labels on the left — 00:00 through 23:00, each at the top of its slot.
+         The slot below 23:00 is the final hour (23:00–24:00), still fully rendered. #}
+      <div class="cal-time-col">
+        {% for h in range(24) %}
+        <div class="cal-hour-label" style="top: {{ h * hour_px }}px">
+          {{ '%02d:00' % h }}
+        </div>
+        {% endfor %}
+      </div>
+
+      {# One column per day #}
+      {% for day, _date in day_headers %}
+      <div class="cal-day-col{% if today_day == day %} today-col{% endif %}">
+
+        {# Horizontal hour lines as a visual grid #}
+        {% for h in range(24) %}
+        <div class="cal-hour-line{% if h % 1 == 0 %} major{% endif %}"
+             style="top: {{ h * hour_px }}px"></div>
+        {% endfor %}
+
+        {# Time blocks for this day #}
+        {% for item in enriched_blocks[day] %}
+        <div class="cal-block"
+             style="top: {{ item.top }}px;
+                    height: {{ item.height }}px;
+                    background-color: {{ item.color }};"
+             title="{{ item.name }}{% if item.block.notes %} — {{ item.block.notes }}{% endif %}">
+          <span class="cal-block-name">{{ item.name }}</span>
+          <span class="cal-block-time">{{ item.block.start_time }}–{{ item.block.end_time }}</span>
+          {% if item.block.notes and item.height >= 45 %}
+          <span class="cal-block-notes">{{ item.block.notes }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+
+      </div>
+      {% endfor %}
+
+    </div>{# /cal-inner #}
+  </div>{# /cal-scroll #}
+
+</div>{# /cal-outer #}
+
+{# ── Bar chart ─────────────────────────────────────────────────────────────── #}
+<div class="chart-section">
+  <h2>Hours this week</h2>
+  {% if chart_rows %}
+  {% for row in chart_rows %}
+  <div class="chart-row">
+    <div class="chart-label" title="{{ row.name }}">{{ row.name }}</div>
+    <div class="chart-bar-wrap">
+      <div class="chart-bar-fill"
+           style="width: {{ row.fill_pct }}%; background-color: {{ row.color }};"></div>
+      {% if row.target_pct is not none %}
+      {#
+        The target marker sits at the project's target_weekly_hours position.
+        Visual: [||||||||||||  x  ] — bars are to the left of x, empty bar to the right.
+        left% is clamped to ≤ 99% so the marker never disappears off the right edge.
+      #}
+      <div class="chart-target-mark"
+           style="left: {{ [row.target_pct, 99] | min }}%;"></div>
+      {% endif %}
+    </div>
+    <div class="chart-hours">
+      {{ '%.1f' % row.planned }}h
+      {% if row.target %} / {{ row.target }}h target{% endif %}
+    </div>
+  </div>
+  {% endfor %}
   {% else %}
-  <p class="text-muted">No blocks.</p>
+  <p class="text-muted">No time blocks planned for this week.</p>
   {% endif %}
 </div>
-{% endfor %}
 
-{# ── Add time block form ───────────────────────────────────────────────────── #}
-<div class="add-block-form">
-  <h2>Add time block</h2>
+{# ── Add time block (collapsible — primary interaction moves to the grid in 8c-3) #}
+<details class="add-block-section">
+  <summary>Add time block manually</summary>
   {% if active_projects %}
   <form method="post" action="{{ request.url_for('add_block') }}" class="form-row">
     <input type="hidden" name="week" value="{{ week }}">
@@ -146,15 +384,14 @@
     <div class="form-group">
       <label for="ab-day">Day</label>
       <select id="ab-day" name="day">
-        {% for d in days %}
-        <option value="{{ d }}">{{ d | title }}</option>
+        {% for day, _date in day_headers %}
+        <option value="{{ day }}">{{ day | title }}</option>
         {% endfor %}
       </select>
     </div>
 
     <div class="form-group">
       <label for="ab-start">Start</label>
-      {# type="time" sends HH:MM which is exactly what TimeBlock expects #}
       <input id="ab-start" type="time" name="start_time" required>
     </div>
 
@@ -165,7 +402,7 @@
 
     <div class="form-group">
       <label for="ab-notes">Notes</label>
-      <input id="ab-notes" type="text" name="notes" placeholder="optional" style="width:14rem">
+      <input id="ab-notes" type="text" name="notes" placeholder="optional" style="width:12rem">
     </div>
 
     <div class="form-group" style="justify-content:flex-end">
@@ -174,15 +411,15 @@
     </div>
   </form>
   {% else %}
-  <p class="text-muted">
+  <p class="text-muted mt-1">
     No active projects yet —
     <a href="{{ request.url_for('project_list') }}">create one first</a>.
   </p>
   {% endif %}
-</div>
+</details>
 
 {# ── Session notes + constraints ──────────────────────────────────────────── #}
-<div class="notes-section">
+<div class="notes-section mt-2">
   <h2>Notes</h2>
   <form method="post" action="{{ request.url_for('save_plan_notes') }}">
     <input type="hidden" name="week" value="{{ week }}">
@@ -204,4 +441,13 @@
   </form>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Scroll the calendar body so that midday (12:00) is centred in the viewport.
+  // Container height is 600 px; 12:00 is at hour_px × 12 = {{ hour_px * 12 }} px.
+  // Subtract half the container height to centre it: {{ hour_px * 12 }} - 300 = {{ hour_px * 12 - 300 }}.
+  document.getElementById('cal-scroll').scrollTop = {{ hour_px * 12 - 300 }};
+</script>
 {% endblock %}

@@ -18,6 +18,7 @@ import asyncio
 import hmac
 import os
 import re
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -110,6 +111,63 @@ def _week_label(week: str) -> str:
         return f"{monday.strftime('%b %-d')} – {sunday.strftime('%b %-d, %Y')}"
     else:
         return f"{monday.strftime('%b %-d, %Y')} – {sunday.strftime('%b %-d, %Y')}"
+
+
+# ── 3c. Calendar grid helpers ────────────────────────────────────────────────
+
+# Predefined palette — 10 perceptually distinct colours chosen to look good on
+# both white card backgrounds and dark nav.  Index is determined by hashing the
+# project UUID so the same project always gets the same colour.
+_PROJECT_COLORS: list[str] = [
+    "#3b82f6",  # blue
+    "#10b981",  # emerald
+    "#f59e0b",  # amber
+    "#ef4444",  # red
+    "#8b5cf6",  # violet
+    "#06b6d4",  # cyan
+    "#f97316",  # orange
+    "#84cc16",  # lime
+    "#ec4899",  # pink
+    "#6366f1",  # indigo
+]
+
+# Pixels per hour in the calendar grid.  Must match the CSS --hour-px variable
+# in planning.html (1440 px total = 24 × 60).
+_HOUR_PX = 60
+
+
+def _project_color(project_id: str) -> str:
+    """Deterministic colour for a project derived from its UUID bytes.
+
+    sum(bytes) mod palette_length — stable across restarts, no external dep.
+    UUIDs have enough byte variation that adjacent IDs rarely get the same colour.
+    """
+    return _PROJECT_COLORS[sum(project_id.encode()) % len(_PROJECT_COLORS)]
+
+
+def _block_top(block: TimeBlock) -> int:
+    """Top offset in pixels for a block in the 24-hour calendar grid."""
+    h, m = map(int, block.start_time.split(":"))
+    # With _HOUR_PX = 60, this simplifies to h*60 + m (one pixel per minute).
+    return (h * 60 + m) * _HOUR_PX // 60
+
+
+def _block_height(block: TimeBlock) -> int:
+    """Height in pixels for a block.  Minimum 15 px so very short blocks stay legible."""
+    sh, sm = map(int, block.start_time.split(":"))
+    eh, em = map(int, block.end_time.split(":"))
+    duration_min = (eh * 60 + em) - (sh * 60 + sm)
+    return max(duration_min * _HOUR_PX // 60, 15)
+
+
+def _planned_hours(blocks: list[TimeBlock]) -> dict[str, float]:
+    """Return {project_id: total_planned_hours} for a list of time blocks."""
+    totals: dict[str, float] = defaultdict(float)
+    for b in blocks:
+        sh, sm = map(int, b.start_time.split(":"))
+        eh, em = map(int, b.end_time.split(":"))
+        totals[b.project_id] += ((eh * 60 + em) - (sh * 60 + sm)) / 60
+    return dict(totals)
 
 
 # ── 4. Watchdog + lifespan (file-watching activated in sub-chunk 8d) ────────
@@ -691,23 +749,91 @@ async def planning_page(
     active_projects = [p for p in all_projects if not p.archived]
     project_map = {p.id: p for p in all_projects}
 
-    # Sort blocks by start_time within each day regardless of insertion order.
-    blocks_by_day: dict[str, list[TimeBlock]] = {day: [] for day in _DAYS}
+    # ── Calendar grid data ───────────────────────────────────────────────────
+
+    # Day column headers: name + date string (e.g. "Mon\nMar 2")
+    monday = _parse_week_monday(week)
+    day_headers = [
+        (day, (monday + timedelta(days=i)).strftime("%b %-d"))
+        for i, day in enumerate(_DAYS)
+    ]
+
+    # Enrich each block with pixel geometry and colour for the grid template.
+    enriched_blocks: dict[str, list[dict]] = {day: [] for day in _DAYS}
     for block in sorted(plan.time_blocks, key=lambda b: b.start_time):
-        if block.day in blocks_by_day:
-            blocks_by_day[block.day].append(block)
+        if block.day not in enriched_blocks:
+            continue
+        proj = project_map.get(block.project_id)
+        enriched_blocks[block.day].append({
+            "block": block,
+            "top": _block_top(block),
+            "height": _block_height(block),
+            "color": _project_color(block.project_id),
+            "name": proj.name if proj else "(deleted project)",
+        })
+
+    # Highlight today's column only when viewing the current week.
+    current_week = _current_week()
+    today_day = (
+        datetime.now(timezone.utc).strftime("%A").lower()
+        if week == current_week else None
+    )
+
+    # ── Bar chart data ───────────────────────────────────────────────────────
+
+    ph = _planned_hours(plan.time_blocks)
+
+    # Include all non-deleted projects that have blocks this week OR a target.
+    chart_projects = [
+        p for p in all_projects
+        if ph.get(p.id, 0) > 0 or (not p.archived and (p.target_weekly_hours or 0) > 0)
+    ]
+
+    # Scale = largest single value across all planned hours and all targets,
+    # so every bar uses the same pixel-per-hour ratio (as requested).
+    scale_values = [ph.get(p.id, 0) for p in chart_projects]
+    scale_values += [p.target_weekly_hours for p in chart_projects if p.target_weekly_hours]
+    max_scale = max(scale_values) if scale_values else 1.0
+
+    chart_rows = sorted(
+        [
+            {
+                "name": p.name,
+                "color": _project_color(p.id),
+                "planned": ph.get(p.id, 0),
+                "target": p.target_weekly_hours,
+                # Percentages drive CSS widths; kept to 1 decimal to avoid
+                # floating-point noise in the rendered HTML.
+                "fill_pct": round(ph.get(p.id, 0) / max_scale * 100, 1),
+                "target_pct": (
+                    round(p.target_weekly_hours / max_scale * 100, 1)
+                    if p.target_weekly_hours else None
+                ),
+            }
+            for p in chart_projects
+        ],
+        # cast: Pylance widens dict values to str|float|None; "planned" is always float
+        key=lambda r: cast(float, r["planned"]),
+        reverse=True,
+    )
 
     return _render(request, "planning.html", {
         "week": week,
         "week_label": _week_label(week),
-        "current_week": _current_week(),
+        "current_week": current_week,
         "prev_week": _week_offset(week, -1),
         "next_week": _week_offset(week, 1),
         "plan": plan,
         "active_projects": active_projects,
         "project_map": project_map,
-        "blocks_by_day": blocks_by_day,
         "days": _DAYS,
+        # Calendar grid
+        "day_headers": day_headers,
+        "enriched_blocks": enriched_blocks,
+        "today_day": today_day,
+        "hour_px": _HOUR_PX,
+        # Bar chart
+        "chart_rows": chart_rows,
     })
 
 
