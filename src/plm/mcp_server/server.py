@@ -761,6 +761,40 @@ def update_behavioral_profile(content: str, summary: str) -> dict:
     return {"ok": True, "history_entries": len(profile.history)}
 
 
+@mcp.tool()
+def patch_behavioral_profile(old_text: str, new_text: str, summary: str) -> dict:
+    """
+    Make a targeted edit to the behavioral profile — analogous to a file
+    patch rather than a full rewrite.
+
+    old_text: the exact substring to find in the current profile content.
+              Must appear exactly once; raises ValueError otherwise.
+    new_text: the replacement text (can be empty to delete old_text).
+    summary:  short description of what changed and why (appended to the
+              audit trail, same as update_behavioral_profile).
+
+    Prefer this over update_behavioral_profile when only one section needs
+    to change — it is more token-efficient and avoids accidentally dropping
+    other parts of the profile.
+    """
+    profile = store.get_profile()
+
+    count = profile.content.count(old_text)
+    if count == 0:
+        raise ValueError("old_text not found in profile content")
+    if count > 1:
+        raise ValueError(
+            f"old_text matches {count} times — make it more specific so the "
+            "patch target is unambiguous"
+        )
+
+    profile.content = profile.content.replace(old_text, new_text, 1)
+    profile.history.append(ProfileUpdate(summary=summary))
+    profile.last_updated = datetime.now(timezone.utc)
+    store.save_profile(profile)
+    return {"ok": True, "history_entries": len(profile.history)}
+
+
 # ---------------------------------------------------------------------------
 # Session
 # ---------------------------------------------------------------------------
