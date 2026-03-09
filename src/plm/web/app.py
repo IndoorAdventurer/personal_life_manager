@@ -17,9 +17,11 @@ Environment variables (resolved at startup):
 import asyncio
 import hmac
 import os
+import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
@@ -30,7 +32,7 @@ from starlette.responses import Response
 
 from plm.models.card import CardLog, KanbanCard
 from plm.models.inbox import InboxNote
-from plm.models.planning import TimeBlock, WeeklyPlan
+from plm.models.planning import Day, TimeBlock, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
 from plm.models.project import Project
 from plm.storage.store import JsonStore
@@ -53,6 +55,61 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 # handler calls _notify_all() from the background thread via call_soon_threadsafe.
 _waiting: list[asyncio.Event] = []
 _loop: asyncio.AbstractEventLoop | None = None
+
+
+# ── 3b. Planning helpers ─────────────────────────────────────────────────────
+# Ordered list used by planning routes and templates — single source of truth.
+_DAYS: list[str] = [
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+]
+
+# Pattern that a valid ISO week string must match (path-traversal guard for filenames).
+_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
+
+# Compiled once at module level rather than inside each request handler.
+_TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+
+def _current_week() -> str:
+    """Return the current ISO week string, e.g. '2026-W10'."""
+    cal = datetime.now(timezone.utc).isocalendar()
+    return f"{cal.year}-W{cal.week:02d}"
+
+
+def _parse_week_monday(week: str) -> datetime:
+    """Parse an ISO week string like '2026-W10' into the Monday of that week.
+
+    strptime with %G/%V/%u handles ISO week numbering correctly:
+      %G — ISO year (may differ from calendar year at year boundaries)
+      %V — ISO week number
+      %u — ISO weekday (1 = Monday)
+    """
+    return datetime.strptime(f"{week}-1", "%G-W%V-%u")
+
+
+def _week_offset(week: str, delta: int) -> str:
+    """Return the ISO week string *delta* weeks before/after *week*."""
+    target = _parse_week_monday(week) + timedelta(weeks=delta)
+    cal = target.isocalendar()
+    return f"{cal.year}-W{cal.week:02d}"
+
+
+def _validate_week(week: str) -> bool:
+    """True if *week* is a plausible YYYY-Www string (guards against path traversal)."""
+    return bool(_WEEK_RE.match(week))
+
+
+def _week_label(week: str) -> str:
+    """Human-readable date range, e.g. 'Mar 2 – 8, 2026' or 'Dec 29 – Jan 4, 2026'."""
+    monday = _parse_week_monday(week)
+    sunday = monday + timedelta(days=6)
+    # %-d removes the leading zero on Linux (glibc); acceptable since we target Pi
+    if monday.month == sunday.month:
+        return f"{monday.strftime('%b %-d')} – {sunday.strftime('%-d, %Y')}"
+    elif monday.year == sunday.year:
+        return f"{monday.strftime('%b %-d')} – {sunday.strftime('%b %-d, %Y')}"
+    else:
+        return f"{monday.strftime('%b %-d, %Y')} – {sunday.strftime('%b %-d, %Y')}"
 
 
 # ── 4. Watchdog + lifespan (file-watching activated in sub-chunk 8d) ────────
@@ -610,16 +667,158 @@ async def delete_column(
     )
 
 
-# ── 7d. Planning stub (8c will replace this) ────────────────────────────────
+# ── 7d. Planning routes (8c) ─────────────────────────────────────────────────
 
 @app.get("/planning", name="planning_page")
 async def planning_page(
     request: Request,
+    week: str | None = None,
     _: None = Depends(require_auth),
 ) -> Response:
-    # Placeholder — sub-chunk 8c will implement the calendar grid.
-    _flash(request, "Planning page coming in sub-chunk 8c.", "info")
-    return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+    # Silently fall back to the current week for missing or malformed values —
+    # bad ?week= params should show a usable page, not an error.
+    if week is None or not _validate_week(week):
+        week = _current_week()
+
+    # Return the saved plan or a transient empty one; we don't save empty plans
+    # to disk so the planning directory stays clean until the user adds content.
+    plan = store.get_plan(week) or WeeklyPlan(week=week)
+
+    # Active projects populate the "Add block" dropdown; archived projects are
+    # excluded from the dropdown but still included in project_map so old blocks
+    # that reference them can still display their names.
+    all_projects = store.list_projects()
+    active_projects = [p for p in all_projects if not p.archived]
+    project_map = {p.id: p for p in all_projects}
+
+    # Sort blocks by start_time within each day regardless of insertion order.
+    blocks_by_day: dict[str, list[TimeBlock]] = {day: [] for day in _DAYS}
+    for block in sorted(plan.time_blocks, key=lambda b: b.start_time):
+        if block.day in blocks_by_day:
+            blocks_by_day[block.day].append(block)
+
+    return _render(request, "planning.html", {
+        "week": week,
+        "week_label": _week_label(week),
+        "current_week": _current_week(),
+        "prev_week": _week_offset(week, -1),
+        "next_week": _week_offset(week, 1),
+        "plan": plan,
+        "active_projects": active_projects,
+        "project_map": project_map,
+        "blocks_by_day": blocks_by_day,
+        "days": _DAYS,
+    })
+
+
+@app.post("/planning/blocks", name="add_block")
+async def add_block(
+    request: Request,
+    week: str = Form(...),
+    project_id: str = Form(...),
+    day: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    notes: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    if store.get_project(project_id) is None:
+        _flash(request, "Project not found.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    if day not in set(_DAYS):
+        _flash(request, "Invalid day.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    # HTML <input type="time"> sends "HH:MM"; validate here as a server-side guard
+    # in case someone posts directly without going through the browser form.
+    if not _TIME_RE.match(start_time) or not _TIME_RE.match(end_time):
+        _flash(request, "Times must be in HH:MM format.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    # Midnight-spanning blocks are not supported (matches MCP server invariant).
+    if end_time <= start_time:
+        _flash(request, "End time must be after start time.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    plan = store.get_plan(week) or WeeklyPlan(week=week)
+    plan.time_blocks.append(TimeBlock(
+        project_id=project_id,
+        # cast is safe: validated against _DAYS above; Pylance can't narrow str→Literal
+        day=cast("Day", day),
+        start_time=start_time,
+        end_time=end_time,
+        notes=notes.strip(),
+    ))
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    return RedirectResponse(url=week_url, status_code=303)
+
+
+@app.post("/planning/blocks/{block_id}/delete", name="delete_block")
+async def delete_block(
+    block_id: str,
+    request: Request,
+    week: str = Form(...),
+    _: None = Depends(require_auth),
+) -> Response:
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    plan = store.get_plan(week)
+    if plan is None:
+        _flash(request, "No plan found for this week.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    original_len = len(plan.time_blocks)
+    plan.time_blocks = [b for b in plan.time_blocks if b.id != block_id]
+    if len(plan.time_blocks) == original_len:
+        _flash(request, "Time block not found.", "error")
+    else:
+        plan.updated_at = datetime.now(timezone.utc)
+        store.save_plan(plan)
+
+    return RedirectResponse(url=week_url, status_code=303)
+
+
+@app.post("/planning/notes", name="save_plan_notes")
+async def save_plan_notes(
+    request: Request,
+    week: str = Form(...),
+    session_notes: str = Form(""),
+    constraints: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    # Create the plan if it doesn't exist yet — saving notes is a valid reason
+    # to materialise a plan file even with no time blocks.
+    plan = store.get_plan(week) or WeeklyPlan(week=week)
+    plan.session_notes = session_notes.strip()
+    plan.constraints = constraints.strip()
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    _flash(request, "Notes saved.", "success")
+    return RedirectResponse(url=week_url, status_code=303)
 
 
 # ── 7e. Inbox + Profile + SSE stubs (8d will replace these) ─────────────────

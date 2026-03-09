@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Planning — {{ week }} — PLM{% endblock %}
+
+{% block extra_style %}
+/* ── Planning page ────────────────────────────────────────────────── */
+
+/* Week navigation bar */
+.week-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.week-nav h1 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;      /* allow flex item to shrink below its content width */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.week-label-sub {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #64748b;
+  margin-top: 0.1rem;
+}
+
+/* Day sections */
+.day-section {
+  margin-bottom: 1.25rem;
+}
+.day-section h2 {
+  text-transform: capitalize;
+  margin-bottom: 0.4rem;
+}
+
+/* Block list table */
+.blocks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.blocks-table td {
+  padding: 0.3rem 0.6rem;
+  vertical-align: middle;
+  border-bottom: 1px solid #f1f5f9;
+}
+.blocks-table tr:last-child td { border-bottom: none; }
+.block-time   { white-space: nowrap; color: #475569; font-variant-numeric: tabular-nums; width: 9rem; }
+.block-project { font-weight: 500; }
+.block-notes   { color: #64748b; }
+.block-actions { text-align: right; white-space: nowrap; width: 5rem; }
+
+/* Add block form */
+.add-block-form {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-top: 1.5rem;
+}
+.add-block-form h2 { margin-top: 0; }
+
+/* Notes section */
+.notes-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-top: 1.25rem;
+}
+.notes-section h2 { margin-top: 0; }
+.notes-section textarea { width: 100%; }
+{% endblock %}
+
+{% block content %}
+
+{# ── Week navigation ──────────────────────────────────────────────────────── #}
+<div class="week-nav">
+  <a href="?week={{ prev_week }}" class="btn btn-secondary btn-sm">← Prev</a>
+  {% if week != current_week %}
+  <a href="?week={{ current_week }}" class="btn btn-ghost btn-sm">Today</a>
+  {% endif %}
+  <h1>
+    {{ week }}
+    <span class="week-label-sub">{{ week_label }}</span>
+  </h1>
+  <a href="?week={{ next_week }}" class="btn btn-secondary btn-sm">Next →</a>
+</div>
+
+{# ── Time blocks by day ───────────────────────────────────────────────────── #}
+{% for day in days %}
+<div class="day-section">
+  <h2>{{ day | title }}</h2>
+  {% set day_blocks = blocks_by_day[day] %}
+  {% if day_blocks %}
+  <table class="blocks-table">
+    {% for block in day_blocks %}
+    <tr>
+      <td class="block-time">{{ block.start_time }} – {{ block.end_time }}</td>
+      <td class="block-project">
+        {% if block.project_id in project_map %}
+          {{ project_map[block.project_id].name }}
+        {% else %}
+          <span class="text-muted">(deleted project)</span>
+        {% endif %}
+      </td>
+      <td class="block-notes">{{ block.notes }}</td>
+      <td class="block-actions">
+        <form method="post"
+              action="{{ request.url_for('delete_block', block_id=block.id) }}"
+              style="display:inline">
+          <input type="hidden" name="week" value="{{ week }}">
+          <button type="submit" class="btn btn-danger btn-sm"
+                  title="Delete this block">✕</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="text-muted">No blocks.</p>
+  {% endif %}
+</div>
+{% endfor %}
+
+{# ── Add time block form ───────────────────────────────────────────────────── #}
+<div class="add-block-form">
+  <h2>Add time block</h2>
+  {% if active_projects %}
+  <form method="post" action="{{ request.url_for('add_block') }}" class="form-row">
+    <input type="hidden" name="week" value="{{ week }}">
+
+    <div class="form-group">
+      <label for="ab-project">Project</label>
+      <select id="ab-project" name="project_id" required>
+        {% for p in active_projects %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="ab-day">Day</label>
+      <select id="ab-day" name="day">
+        {% for d in days %}
+        <option value="{{ d }}">{{ d | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="ab-start">Start</label>
+      {# type="time" sends HH:MM which is exactly what TimeBlock expects #}
+      <input id="ab-start" type="time" name="start_time" required>
+    </div>
+
+    <div class="form-group">
+      <label for="ab-end">End</label>
+      <input id="ab-end" type="time" name="end_time" required>
+    </div>
+
+    <div class="form-group">
+      <label for="ab-notes">Notes</label>
+      <input id="ab-notes" type="text" name="notes" placeholder="optional" style="width:14rem">
+    </div>
+
+    <div class="form-group" style="justify-content:flex-end">
+      <label>&nbsp;</label>
+      <button type="submit" class="btn btn-primary">Add</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="text-muted">
+    No active projects yet —
+    <a href="{{ request.url_for('project_list') }}">create one first</a>.
+  </p>
+  {% endif %}
+</div>
+
+{# ── Session notes + constraints ──────────────────────────────────────────── #}
+<div class="notes-section">
+  <h2>Notes</h2>
+  <form method="post" action="{{ request.url_for('save_plan_notes') }}">
+    <input type="hidden" name="week" value="{{ week }}">
+
+    <div class="form-group">
+      <label for="pn-session">Session notes</label>
+      <textarea id="pn-session" name="session_notes" rows="4">{{ plan.session_notes }}</textarea>
+    </div>
+
+    {# Constraints are week-specific one-off notes (e.g. "Wednesday evening blocked").
+       Distinct from session_notes which capture what was decided during planning. #}
+    <div class="form-group mt-2">
+      <label for="pn-constraints">Week constraints</label>
+      <textarea id="pn-constraints" name="constraints" rows="2"
+                placeholder="e.g. Wednesday evening blocked, have dinner plans">{{ plan.constraints }}</textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary mt-2">Save notes</button>
+  </form>
+</div>
+
+{% endblock %}
