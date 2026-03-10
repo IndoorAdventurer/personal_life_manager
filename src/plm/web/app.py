@@ -1346,4 +1346,7 @@ def main() -> None:
     # proxy (e.g. Caddy).  Without this, uvicorn sees the Caddy→app hop as plain
     # HTTP and generates http:// URLs, causing browser "insecure form" warnings
     # even though the browser↔Caddy connection is HTTPS.
-    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path, proxy_headers=True)
+    # forwarded_allow_ips="*" is needed because the request arrives from the Docker
+    # bridge gateway (172.17.0.1), not 127.0.0.1 — uvicorn's default trusted address.
+    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path,
+                proxy_headers=True, forwarded_allow_ips="*")
