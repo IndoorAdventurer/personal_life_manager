@@ -1342,4 +1342,8 @@ def main() -> None:
     # template changes needed.
     root_path = os.environ.get("PLM_ROOT_PATH", "")
 
-    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path)
+    # proxy_headers=True tells uvicorn to trust X-Forwarded-Proto from a reverse
+    # proxy (e.g. Caddy).  Without this, uvicorn sees the Caddy→app hop as plain
+    # HTTP and generates http:// URLs, causing browser "insecure form" warnings
+    # even though the browser↔Caddy connection is HTTPS.
+    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path, proxy_headers=True)
