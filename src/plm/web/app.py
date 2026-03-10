@@ -817,6 +817,11 @@ async def planning_page(
         reverse=True,
     )
 
+    # Colour lookup used by the project palette chips in the template.
+    # Includes all projects (not just active) so archived-project blocks still
+    # get the right colour when shown in enriched_blocks.
+    project_colors = {p.id: _project_color(p.id) for p in all_projects}
+
     return _render(request, "planning.html", {
         "week": week,
         "week_label": _week_label(week),
@@ -826,6 +831,7 @@ async def planning_page(
         "plan": plan,
         "active_projects": active_projects,
         "project_map": project_map,
+        "project_colors": project_colors,
         "days": _DAYS,
         # Calendar grid
         "day_headers": day_headers,
@@ -917,6 +923,161 @@ async def delete_block(
         plan.updated_at = datetime.now(timezone.utc)
         store.save_plan(plan)
 
+    return RedirectResponse(url=week_url, status_code=303)
+
+
+@app.post("/planning/blocks/{block_id}/move", name="move_block")
+async def move_block(
+    block_id: str,
+    request: Request,
+    week: str = Form(...),
+    day: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    _: None = Depends(require_auth),
+) -> Response:
+    """Reposition a time block to a new day/time slot.
+
+    Called by the interactive calendar grid when the user drags a block.
+    The block's project and notes are preserved; only day/start/end change.
+    """
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    if day not in set(_DAYS):
+        _flash(request, "Invalid day.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    if not _TIME_RE.match(start_time) or not _TIME_RE.match(end_time):
+        _flash(request, "Times must be in HH:MM format.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    if end_time <= start_time:
+        _flash(request, "End time must be after start time.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    plan = store.get_plan(week)
+    if plan is None:
+        _flash(request, "No plan found for this week.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    block = next((b for b in plan.time_blocks if b.id == block_id), None)
+    if block is None:
+        _flash(request, "Time block not found.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    block.day = cast("Day", day)
+    block.start_time = start_time
+    block.end_time = end_time
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    return RedirectResponse(url=week_url, status_code=303)
+
+
+@app.post("/planning/blocks/{block_id}/update", name="update_block")
+async def update_block(
+    block_id: str,
+    request: Request,
+    week: str = Form(...),
+    day: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    notes: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    """Edit an existing time block's day, times, and notes.
+
+    Supersedes move_block for form-based edits; move_block is still used by the
+    drag-and-drop gesture.  The block's project is intentionally not editable
+    here — changing the project would require re-selecting from the palette,
+    which is a different UX flow.
+    """
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    if day not in set(_DAYS):
+        _flash(request, "Invalid day.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    if not _TIME_RE.match(start_time) or not _TIME_RE.match(end_time):
+        _flash(request, "Times must be in HH:MM format.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    if end_time <= start_time:
+        _flash(request, "End time must be after start time.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    plan = store.get_plan(week)
+    if plan is None:
+        _flash(request, "No plan found for this week.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    block = next((b for b in plan.time_blocks if b.id == block_id), None)
+    if block is None:
+        _flash(request, "Time block not found.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    block.day        = cast("Day", day)
+    block.start_time = start_time
+    block.end_time   = end_time
+    block.notes      = notes.strip()
+    plan.updated_at  = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    return RedirectResponse(url=week_url, status_code=303)
+
+
+@app.post("/planning/blocks/{block_id}/duplicate", name="duplicate_block")
+async def duplicate_block(
+    block_id: str,
+    request: Request,
+    week: str = Form(...),
+    _: None = Depends(require_auth),
+) -> Response:
+    """Duplicate a time block within the same week.
+
+    Creates an independent copy with a fresh UUID so the original and copy
+    can be moved or deleted separately.  The copy lands on the same
+    day/time as the source — the user can then drag it to a new slot.
+    """
+    planning_url = str(request.url_for("planning_page"))
+
+    if not _validate_week(week):
+        _flash(request, "Invalid week.", "error")
+        return RedirectResponse(url=planning_url, status_code=303)
+
+    week_url = f"{planning_url}?week={week}"
+
+    plan = store.get_plan(week)
+    if plan is None:
+        _flash(request, "No plan found for this week.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    block = next((b for b in plan.time_blocks if b.id == block_id), None)
+    if block is None:
+        _flash(request, "Time block not found.", "error")
+        return RedirectResponse(url=week_url, status_code=303)
+
+    # TimeBlock() auto-generates a fresh UUID for the copy's id field
+    copy = TimeBlock(
+        project_id=block.project_id,
+        day=block.day,
+        start_time=block.start_time,
+        end_time=block.end_time,
+        notes=block.notes,
+    )
+    plan.time_blocks.append(copy)
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
     return RedirectResponse(url=week_url, status_code=303)
 
 

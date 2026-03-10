@@ -424,6 +424,211 @@ class TestSavePlanNotes:
 
 
 # ---------------------------------------------------------------------------
+# POST /planning/blocks/{block_id}/move
+# ---------------------------------------------------------------------------
+
+class TestMoveBlock:
+    def test_move_changes_day_and_time(self, client: TestClient, store: JsonStore) -> None:
+        """Moving a block updates its day, start_time, and end_time in the store."""
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = _make_block(p.id, "monday", "09:00", "10:00")
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        resp = client.post(
+            f"/planning/blocks/{block.id}/move",
+            data={"week": _WEEK, "day": "wednesday", "start_time": "14:00", "end_time": "15:30"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        plan = store.get_plan(_WEEK)
+        assert plan is not None
+        assert len(plan.time_blocks) == 1
+        b = plan.time_blocks[0]
+        assert b.day == "wednesday"
+        assert b.start_time == "14:00"
+        assert b.end_time == "15:30"
+
+    def test_move_preserves_project_and_notes(self, client: TestClient, store: JsonStore) -> None:
+        """Moving does not alter the block's project_id or notes."""
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = TimeBlock(project_id=p.id, day="monday", start_time="09:00",
+                          end_time="10:00", notes="keep me")
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        client.post(
+            f"/planning/blocks/{block.id}/move",
+            data={"week": _WEEK, "day": "friday", "start_time": "10:00", "end_time": "11:00"},
+            follow_redirects=False,
+        )
+
+        plan = store.get_plan(_WEEK)
+        assert plan is not None
+        b = plan.time_blocks[0]
+        assert b.project_id == p.id
+        assert b.notes == "keep me"
+
+    def test_move_nonexistent_block_shows_error(self, client: TestClient, store: JsonStore) -> None:
+        _make_plan(store)
+        resp = client.post(
+            "/planning/blocks/ghost-id/move",
+            data={"week": _WEEK, "day": "tuesday", "start_time": "10:00", "end_time": "11:00"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "not found" in resp.text
+
+    def test_move_no_plan_shows_error(self, client: TestClient) -> None:
+        """Moving when the week has no plan returns an error, not a crash."""
+        resp = client.post(
+            "/planning/blocks/any-id/move",
+            data={"week": _WEEK, "day": "monday", "start_time": "09:00", "end_time": "10:00"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "No plan found" in resp.text
+
+    def test_move_invalid_week_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/planning/blocks/any-id/move",
+            data={"week": "../../etc", "day": "monday", "start_time": "09:00", "end_time": "10:00"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "Invalid week" in resp.text
+
+    def test_move_invalid_day_rejected(self, client: TestClient, store: JsonStore) -> None:
+        _make_plan(store)
+        resp = client.post(
+            "/planning/blocks/any-id/move",
+            data={"week": _WEEK, "day": "funday", "start_time": "09:00", "end_time": "10:00"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "Invalid day" in resp.text
+
+    def test_move_end_before_start_rejected(self, client: TestClient, store: JsonStore) -> None:
+        _make_plan(store)
+        resp = client.post(
+            "/planning/blocks/any-id/move",
+            data={"week": _WEEK, "day": "monday", "start_time": "12:00", "end_time": "09:00"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "End time must be after" in resp.text
+
+    def test_move_redirect_preserves_week(self, client: TestClient, store: JsonStore) -> None:
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = _make_block(p.id)
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        resp = client.post(
+            f"/planning/blocks/{block.id}/move",
+            data={"week": _WEEK, "day": "thursday", "start_time": "11:00", "end_time": "12:00"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert _WEEK in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# POST /planning/blocks/{block_id}/duplicate
+# ---------------------------------------------------------------------------
+
+class TestDuplicateBlock:
+    def test_duplicate_adds_copy(self, client: TestClient, store: JsonStore) -> None:
+        """Duplicating a block adds a second block with the same project/day/times."""
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = _make_block(p.id, "tuesday", "10:00", "11:00")
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        resp = client.post(
+            f"/planning/blocks/{block.id}/duplicate",
+            data={"week": _WEEK},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        plan = store.get_plan(_WEEK)
+        assert plan is not None
+        assert len(plan.time_blocks) == 2
+        copy = next(b for b in plan.time_blocks if b.id != block.id)
+        assert copy.project_id == block.project_id
+        assert copy.day == block.day
+        assert copy.start_time == block.start_time
+        assert copy.end_time == block.end_time
+
+    def test_duplicate_has_different_id(self, client: TestClient, store: JsonStore) -> None:
+        """The copy must have its own UUID so it can be independently moved/deleted."""
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = _make_block(p.id)
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        client.post(f"/planning/blocks/{block.id}/duplicate",
+                    data={"week": _WEEK}, follow_redirects=False)
+
+        plan = store.get_plan(_WEEK)
+        assert plan is not None
+        ids = [b.id for b in plan.time_blocks]
+        assert len(ids) == len(set(ids)), "block IDs must be unique"
+
+    def test_duplicate_nonexistent_block_shows_error(
+        self, client: TestClient, store: JsonStore
+    ) -> None:
+        _make_plan(store)
+        resp = client.post(
+            "/planning/blocks/ghost-id/duplicate",
+            data={"week": _WEEK},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "not found" in resp.text
+
+    def test_duplicate_no_plan_shows_error(self, client: TestClient) -> None:
+        resp = client.post(
+            "/planning/blocks/any-id/duplicate",
+            data={"week": _WEEK},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "No plan found" in resp.text
+
+    def test_duplicate_invalid_week_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/planning/blocks/any-id/duplicate",
+            data={"week": "../bad"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "Invalid week" in resp.text
+
+    def test_duplicate_redirect_preserves_week(self, client: TestClient, store: JsonStore) -> None:
+        p = _make_project(store)
+        plan = _make_plan(store)
+        block = _make_block(p.id)
+        plan.time_blocks.append(block)
+        store.save_plan(plan)
+
+        resp = client.post(
+            f"/planning/blocks/{block.id}/duplicate",
+            data={"week": _WEEK},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert _WEEK in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
 # Week helper unit tests
 # ---------------------------------------------------------------------------
 
