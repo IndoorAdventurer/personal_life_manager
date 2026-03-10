@@ -1,11 +1,21 @@
 # Raspberry Pi Deployment Guide
 
 This guide walks through running `plm-web` as a persistent service on a Raspberry Pi
-so it is available on your LAN.
+so it is available on your LAN (or from anywhere via a reverse proxy).
 
 The MCP server (`plm-mcp`) runs on whatever machine you use Claude Code on — it does
 not need to run on the Pi. Both processes share the same JSON data directory; if you
 want the MCP server and web UI on the same machine, that works too — just run both.
+
+---
+
+## Which installation method?
+
+| Your situation | Recommended approach |
+|---|---|
+| Pi running **Raspberry Pi OS Bookworm** (Debian 12) or newer | [Direct install](#1-install-the-package-on-the-pi) — Python 3.11+ ships out of the box |
+| Pi running **Bullseye** (Debian 11) or older | [Docker install](#docker-deployment) — avoids the Python 3.9 version conflict |
+| Not sure | Run `python3 --version` on the Pi; if it's below 3.11, use Docker |
 
 ---
 
@@ -158,24 +168,139 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
 sudo apt update && sudo apt install caddy
 ```
 
-Edit `/etc/caddy/Caddyfile`:
+Edit `/etc/caddy/Caddyfile`.
+
+**Option A — PLM gets the whole domain** (simplest; no `PLM_ROOT_PATH` needed):
 
 ```
-# Proxy the entire site — no subpath, no PLM_ROOT_PATH needed
-:80 {
+your.domain.com {
     reverse_proxy localhost:8000
 }
 ```
 
-Restart Caddy:
+**Option B — PLM lives at a subpath** (e.g. `your.domain.com/plm/`, alongside other
+services like Jellyfin):
+
+```
+your.domain.com {
+    # handle_path strips the /plm prefix before forwarding to the app.
+    # Use handle_path here, NOT handle — handle passes the full /plm/... path
+    # to the app, which then sees it doubled (/plm/plm/...) and returns 404s.
+    handle_path /plm/* {
+        reverse_proxy localhost:8000
+    }
+
+    # Other services on the same domain:
+    handle_path /jelly/* {
+        reverse_proxy localhost:8096
+    }
+}
+```
+
+When using Option B, set `PLM_ROOT_PATH=/plm` in your env file (or Docker env vars)
+so the app generates correct URLs for links, redirects, and form actions.
+
+Reload Caddy:
 
 ```bash
 sudo systemctl reload caddy
 ```
 
-The web UI is now available at `http://<pi-hostname>.local` (port 80, no port number
-in the URL). If you give your Pi a real domain name, Caddy will obtain and renew a
-Let's Encrypt certificate automatically.
+If you give your Pi a real domain name, Caddy will obtain and renew a Let's Encrypt
+certificate automatically — HTTPS requires no extra configuration.
+
+---
+
+---
+
+## Docker deployment
+
+Use this approach if your Pi runs Debian Bullseye (or any OS with Python < 3.11).
+Docker isolates the app in its own Python 3.12 environment with zero impact on the
+host system.
+
+### Install Docker
+
+```bash
+# Official convenience script — works on all Debian/Raspberry Pi OS versions
+curl -fsSL https://get.docker.com | sh
+
+# Add your user to the docker group so you don't need sudo
+sudo usermod -aG docker $USER
+
+# Log out and back in for the group change to take effect, then verify:
+docker run hello-world
+```
+
+### Build the image
+
+```bash
+cd ~/personal_life_manager   # wherever you cloned the repo
+docker build -t plm .
+```
+
+The first build downloads the base Python image (~50 MB compressed) and installs
+dependencies. Subsequent rebuilds reuse cached layers and are much faster.
+
+### Run the container
+
+```bash
+docker run -d \
+  --name plm \
+  --restart unless-stopped \
+  -p 8000:8000 \
+  -v ~/.local/share/plm:/data \
+  -e PLM_DATA_DIR=/data \
+  -e PLM_ROOT_PATH=/plm \
+  -e PLM_PASSWORD=your-password \
+  -e PLM_SESSION_SECRET=your-long-random-secret \
+  plm
+```
+
+Key flags explained:
+- `-d` — run in the background (detached)
+- `--restart unless-stopped` — auto-start at boot and restart on crash
+- `-v ~/.local/share/plm:/data` — bind-mount the host data directory into the container.
+  Data is stored on the host, not inside the container, so Syncthing keeps working and
+  data survives container rebuilds.
+- `-e PLM_DATA_DIR=/data` — tell the app to use the mounted directory
+- `-e PLM_ROOT_PATH=/plm` — set the subpath prefix if you're behind a reverse proxy
+  (omit if PLM gets the whole domain)
+
+Generate a good session secret:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+### Useful Docker commands
+
+```bash
+# Check it's running
+docker ps
+
+# Follow logs
+docker logs plm -f
+
+# Stop / start
+docker stop plm
+docker start plm
+```
+
+### Updating (Docker)
+
+```bash
+cd ~/personal_life_manager
+git pull
+docker build -t plm .
+docker stop plm && docker rm plm
+# Re-run the docker run command from above
+```
+
+### Caddy with Docker
+
+The Caddy setup is identical to the direct install — see [section 5](#5-optional-caddy-reverse-proxy-https--friendly-url) above.
+Caddy proxies to `localhost:8000` regardless of whether the app runs in Docker or not.
 
 ---
 
@@ -203,7 +328,7 @@ trying things out before committing to a Pi deployment.
 
 ---
 
-## 7. Updating
+## 7. Updating (direct install)
 
 The `-e` (editable) install means that `git pull` updates the source in place.
 A reinstall is still needed to pick up any new entry points or dependencies added
@@ -225,5 +350,7 @@ systemctl --user restart plm-web
 | Service won't start | `journalctl --user -u plm-web -f` — look for `PLM_PASSWORD` or `PLM_SESSION_SECRET` missing |
 | `plm-web: command not found` | `~/.local/bin` not in `$PATH` — re-read the PATH note in step 1 |
 | Browser shows connection refused | `systemctl --user status plm-web` — confirm it's active |
+| Caddy subpath returns 404 | Make sure you used `handle_path`, not `handle` — see section 5 |
+| Browser warns "insecure connection" on forms | Set `PLM_ROOT_PATH` correctly and ensure Caddy forwards `X-Forwarded-Proto` (it does by default) |
 | SSE live reload not working | Caddy proxies SSE correctly by default; if using another proxy, ensure response buffering is disabled |
 | Page auto-reloads repeatedly | Known issue — see post-MVP polish items in CLAUDE.md. Workaround: ignore or add a debounce |

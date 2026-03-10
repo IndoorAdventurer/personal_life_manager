@@ -97,6 +97,8 @@ optional, but it's what makes Claude collaboration smooth.
 
 > **Platform note:** developed and tested on Linux. The core logic is
 > platform-agnostic, but the deployment guide targets Linux (systemd, Raspberry Pi OS).
+> A `Dockerfile` is included for older OS versions (e.g. Raspberry Pi OS Bullseye)
+> that ship Python < 3.11 — see [docs/pi-deployment.md](docs/pi-deployment.md).
 
 ---
 
