@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
+import markdown as _md
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -50,6 +51,10 @@ store = JsonStore()
 
 _templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
+
+# Register a Jinja2 filter so templates can render markdown with {{ text | markdown | safe }}.
+# _md.markdown() returns an HTML string; Jinja2's `safe` marks it trusted for output.
+templates.env.filters["markdown"] = lambda text: _md.markdown(text or "")
 
 # _waiting / _loop: used by the SSE endpoint (sub-chunk 8d).
 # Each connected browser tab registers an asyncio.Event here; the watchdog
@@ -1108,24 +1113,121 @@ async def save_plan_notes(
     return RedirectResponse(url=week_url, status_code=303)
 
 
-# ── 7e. Inbox + Profile + SSE stubs (8d will replace these) ─────────────────
+# ── 7e. Inbox routes (8d) ────────────────────────────────────────────────────
 
 @app.get("/inbox", name="inbox_page")
 async def inbox_page(
     request: Request,
     _: None = Depends(require_auth),
 ) -> Response:
-    _flash(request, "Inbox page coming in sub-chunk 8d.", "info")
-    return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+    notes = store.get_inbox()
+    # Split into unaddressed and addressed; within each group newest-first.
+    unaddressed = sorted(
+        [n for n in notes if not n.addressed],
+        key=lambda n: n.created_at,
+        reverse=True,
+    )
+    addressed = sorted(
+        [n for n in notes if n.addressed],
+        key=lambda n: n.addressed_at or n.created_at,
+        reverse=True,
+    )
+    return _render(request, "inbox.html", {
+        "unaddressed": unaddressed,
+        "addressed": addressed,
+    })
 
+
+@app.post("/inbox/notes", name="inbox_add_note")
+async def inbox_add_note(
+    request: Request,
+    content: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    content_stripped = content.strip()
+    if not content_stripped:
+        _flash(request, "Note content cannot be empty.", "error")
+        return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+    store.add_inbox_note(InboxNote(content=content_stripped))
+    return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+
+@app.post("/inbox/notes/{note_id}/address", name="inbox_address_note")
+async def inbox_address_note(
+    note_id: str,
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    """Toggle a note between addressed and unaddressed."""
+    notes = store.get_inbox()
+    note = next((n for n in notes if n.id == note_id), None)
+    if note is None:
+        _flash(request, "Note not found.", "error")
+        return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+    note.addressed = not note.addressed
+    # Record when it was addressed; clear the timestamp when un-addressing so the
+    # sort order for re-addressed notes is based on the new timestamp.
+    note.addressed_at = datetime.now(timezone.utc) if note.addressed else None
+    store.save_inbox(notes)
+    return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+
+@app.post("/inbox/notes/{note_id}/delete", name="inbox_delete_note")
+async def inbox_delete_note(
+    note_id: str,
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    notes = store.get_inbox()
+    original_count = len(notes)
+    notes = [n for n in notes if n.id != note_id]
+    if len(notes) == original_count:
+        _flash(request, "Note not found.", "error")
+        return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+    store.save_inbox(notes)
+    return RedirectResponse(url=str(request.url_for("inbox_page")), status_code=303)
+
+
+# ── 7f. Profile routes (8d) ──────────────────────────────────────────────────
 
 @app.get("/profile", name="profile_page")
 async def profile_page(
     request: Request,
     _: None = Depends(require_auth),
 ) -> Response:
-    _flash(request, "Profile page coming in sub-chunk 8d.", "info")
-    return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
+    profile = store.get_profile()
+    # History newest-first for display; the model stores it append-only (oldest-first).
+    history = list(reversed(profile.history))
+    return _render(request, "profile.html", {"profile": profile, "history": history})
+
+
+@app.post("/profile", name="profile_update")
+async def profile_update(
+    request: Request,
+    content: str = Form(""),
+    change_summary: str = Form(""),
+    _: None = Depends(require_auth),
+) -> Response:
+    """Save a new profile content string.
+
+    If the user provides a change_summary, a ProfileUpdate history entry is
+    appended so the evolution of the profile is traceable.  The summary is
+    optional — a direct edit without explanation is still valid.
+    """
+    profile = store.get_profile()
+    profile.content = content.strip()
+    profile.last_updated = datetime.now(timezone.utc)
+
+    summary_stripped = change_summary.strip()
+    if summary_stripped:
+        profile.history.append(ProfileUpdate(summary=summary_stripped))
+
+    store.save_profile(profile)
+    _flash(request, "Profile saved.", "success")
+    return RedirectResponse(url=str(request.url_for("profile_page")), status_code=303)
 
 
 # ── 8. Entry point ───────────────────────────────────────────────────────────

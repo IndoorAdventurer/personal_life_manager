@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Behavioral Profile — PLM{% endblock %}
+
+{% block extra_style %}
+/* ── Profile content — rendered markdown ── */
+.profile-content {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem 1.4rem;
+  margin-bottom: 1rem;
+  /* Basic prose typography for rendered markdown */
+  line-height: 1.7;
+}
+/* Style the markdown output produced by the `markdown` filter */
+.profile-content h1,
+.profile-content h2,
+.profile-content h3 {
+  color: #0f172a;
+  margin-top: 1.1rem;
+  margin-bottom: 0.4rem;
+}
+.profile-content h1 { font-size: 1.2rem; }
+.profile-content h2 { font-size: 1.05rem; }
+.profile-content h3 { font-size: 0.95rem; }
+.profile-content p  { margin-bottom: 0.6rem; }
+.profile-content ul,
+.profile-content ol { padding-left: 1.4rem; margin-bottom: 0.6rem; }
+.profile-content li { margin-bottom: 0.2rem; }
+.profile-content code {
+  background: #f1f5f9;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.875em;
+}
+.profile-content pre code { display: block; padding: 0.6rem; overflow-x: auto; }
+.profile-content blockquote {
+  border-left: 3px solid #cbd5e1;
+  margin: 0;
+  padding-left: 0.8rem;
+  color: #64748b;
+}
+.profile-meta {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+/* ── Edit form (in <details>) ── */
+.edit-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.edit-section > summary {
+  font-size: 0.875rem;
+  color: #64748b;
+  font-weight: 500;
+}
+.edit-form { margin-top: 0.75rem; }
+.edit-form textarea { width: 100%; min-height: 200px; font-family: monospace; font-size: 0.875rem; }
+.edit-form .hint { font-size: 0.775rem; color: #94a3b8; margin-top: 0.2rem; }
+.edit-form .form-group + .form-group { margin-top: 0.6rem; }
+.edit-form input[type=text] { width: 100%; }
+
+/* ── History section ── */
+.history-section {
+  margin-top: 1rem;
+}
+.history-entry {
+  border-left: 3px solid #e2e8f0;
+  padding: 0.4rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.history-date { font-size: 0.775rem; color: #94a3b8; margin-bottom: 0.15rem; }
+.history-summary { font-size: 0.875rem; color: #334155; }
+{% endblock %}
+
+{% block content %}
+<h1>Behavioral Profile</h1>
+
+<!-- ── Profile content ── -->
+{% if profile.content %}
+  <div class="profile-content">
+    {{ profile.content | markdown | safe }}
+  </div>
+  {% if profile.last_updated %}
+  <p class="profile-meta">Last updated {{ profile.last_updated.strftime('%b %-d %Y, %H:%M') }} UTC</p>
+  {% endif %}
+{% else %}
+  <p class="text-muted" style="margin-bottom: 1rem;">No profile set yet. Use the edit form below to add one.</p>
+{% endif %}
+
+<!-- ── Edit form (collapsed by default if content exists) ── -->
+<details class="edit-section" {% if not profile.content %}open{% endif %}>
+  <summary>Edit profile</summary>
+  <form class="edit-form" method="post" action="{{ request.url_for('profile_update') }}">
+    <div class="form-group">
+      <label for="profile-content">Profile content (Markdown supported)</label>
+      <textarea id="profile-content" name="content">{{ profile.content }}</textarea>
+      <span class="hint">Describe work style, focus patterns, preferences — Claude reads this before planning.</span>
+    </div>
+    <div class="form-group">
+      <label for="change-summary">What changed? (optional)</label>
+      <input type="text" id="change-summary" name="change_summary"
+             placeholder="e.g. Added note about Friday focus time" autocomplete="off">
+      <span class="hint">If provided, this is appended to the history log below.</span>
+    </div>
+    <div style="margin-top: 0.75rem;">
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</details>
+
+<!-- ── History (collapsed) ── -->
+{% if history %}
+<details class="history-section">
+  <summary class="text-muted">Change history ({{ history|length }})</summary>
+  <div class="mt-1">
+    {% for entry in history %}
+    <div class="history-entry">
+      <div class="history-date">{{ entry.date.strftime('%b %-d %Y, %H:%M') }} UTC</div>
+      <div class="history-summary">{{ entry.summary }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% endblock %}

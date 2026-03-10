@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Inbox — PLM{% endblock %}
+
+{% block extra_style %}
+/* ── Add-note form ── */
+.add-note-form {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.5rem;
+}
+.add-note-form h2 { margin-top: 0; margin-bottom: 0.6rem; }
+.add-note-form textarea { width: 100%; min-height: 80px; }
+
+/* ── Note card ── */
+.note-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.75rem 1.1rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+.note-card + .note-card { margin-top: 0.6rem; }
+.note-card.addressed {
+  opacity: 0.6;
+  background: #f8fafc;
+}
+
+.note-body { flex: 1; min-width: 0; }
+.note-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.9rem;
+  color: #1e293b;
+  line-height: 1.5;
+}
+.note-meta {
+  font-size: 0.775rem;
+  color: #94a3b8;
+  margin-top: 0.3rem;
+}
+
+.note-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+/* ── Addressed section ── */
+.addressed-section { margin-top: 2rem; }
+.addressed-summary {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+}
+{% endblock %}
+
+{% block content %}
+<h1>Inbox</h1>
+
+<!-- ── Add note form ── -->
+<div class="add-note-form">
+  <h2>New note</h2>
+  <form method="post" action="{{ request.url_for('inbox_add_note') }}">
+    <div class="form-group" style="margin-bottom: 0.6rem;">
+      <label for="note-content">Content</label>
+      <textarea id="note-content" name="content" placeholder="Capture a thought, task, or idea…" required></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Add note</button>
+  </form>
+</div>
+
+<!-- ── Unaddressed notes ── -->
+{% if unaddressed %}
+  {% for note in unaddressed %}
+  <div class="note-card">
+    <div class="note-body">
+      <div class="note-content">{{ note.content }}</div>
+      <div class="note-meta">{{ note.created_at.strftime('%b %-d %Y, %H:%M') }} UTC</div>
+    </div>
+    <div class="note-actions">
+      <!-- Mark as addressed -->
+      <form method="post" action="{{ request.url_for('inbox_address_note', note_id=note.id) }}">
+        <button type="submit" class="btn btn-secondary btn-sm" title="Mark addressed">Done</button>
+      </form>
+      <!-- Delete -->
+      <form method="post" action="{{ request.url_for('inbox_delete_note', note_id=note.id) }}"
+            onsubmit="return confirm('Delete this note permanently?')">
+        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p class="text-muted">No unaddressed notes — inbox is clear!</p>
+{% endif %}
+
+<!-- ── Addressed notes (collapsed) ── -->
+{% if addressed %}
+<div class="addressed-section">
+  <details>
+    <summary class="addressed-summary">Addressed ({{ addressed|length }})</summary>
+    <div class="mt-1">
+      {% for note in addressed %}
+      <div class="note-card addressed">
+        <div class="note-body">
+          <div class="note-content">{{ note.content }}</div>
+          <div class="note-meta">
+            Added {{ note.created_at.strftime('%b %-d %Y, %H:%M') }} UTC
+            {% if note.addressed_at %}
+              · Done {{ note.addressed_at.strftime('%b %-d %Y, %H:%M') }} UTC
+            {% endif %}
+          </div>
+        </div>
+        <div class="note-actions">
+          <!-- Reopen (un-address) -->
+          <form method="post" action="{{ request.url_for('inbox_address_note', note_id=note.id) }}">
+            <button type="submit" class="btn btn-ghost btn-sm">Reopen</button>
+          </form>
+          <!-- Delete -->
+          <form method="post" action="{{ request.url_for('inbox_delete_note', note_id=note.id) }}"
+                onsubmit="return confirm('Delete this note permanently?')">
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endif %}
+
+{% endblock %}

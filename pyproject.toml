@@ -20,6 +20,10 @@ dependencies = [
     # watchdog: file-system event watcher used by the SSE live-reload feature (8d).
     # On Linux it uses inotify — zero polling, instant notifications.
     "watchdog>=3.0.0",
+    # markdown: converts the BehavioralProfile content (free-form markdown) to HTML
+    # for display in the Profile page.  Server-side rendering keeps the template
+    # simple and avoids shipping a JS markdown library to the browser.
+    "markdown>=3.0",
 ]
 
 [project.optional-dependencies]
