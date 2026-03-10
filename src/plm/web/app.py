@@ -27,10 +27,12 @@ from typing import cast
 import markdown as _md
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
 
 from plm.models.card import CardLog, KanbanCard
 from plm.models.inbox import InboxNote
@@ -175,20 +177,53 @@ def _planned_hours(blocks: list[TimeBlock]) -> dict[str, float]:
     return dict(totals)
 
 
-# ── 4. Watchdog + lifespan (file-watching activated in sub-chunk 8d) ────────
+# ── 4. Watchdog + lifespan ───────────────────────────────────────────────────
+
+def _notify_all() -> None:
+    """Set every waiting SSE client's asyncio.Event, triggering a reload send.
+
+    Must be called from within the event loop (use call_soon_threadsafe when
+    calling from the watchdog background thread).
+    """
+    for ev in _waiting:
+        ev.set()
+
+
+class _StoreWatcher(FileSystemEventHandler):
+    """Watchdog handler: fires _notify_all() whenever any store file changes.
+
+    Watchdog runs in its own background thread, so we must schedule
+    _notify_all() onto the asyncio event loop via call_soon_threadsafe — direct
+    asyncio calls from a non-loop thread are not safe.
+    """
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        # Ignore directory events (we care about file content changes only)
+        # and .tmp files, which are the atomic-write intermediaries that
+        # immediately get replaced by os.replace() — clients should reload
+        # after the real file appears, not on the temp write.
+        if event.is_directory or str(event.src_path).endswith(".tmp"):
+            return
+        if _loop is not None:
+            _loop.call_soon_threadsafe(_notify_all)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """
-    FastAPI lifespan context manager.
-
-    Sub-chunk 8d will start the watchdog Observer here and stop it on shutdown.
-    For 8a–8c this is a no-op placeholder that only captures the event loop so
-    the SSE notification path has a reference to it when 8d lands.
-    """
+    """Start the watchdog observer on startup; stop it cleanly on shutdown."""
     global _loop
     _loop = asyncio.get_event_loop()
+
+    observer = Observer()
+    # Watch the entire data directory recursively so projects/, planning/,
+    # inbox.json, and profile.json are all covered by one observer.
+    observer.schedule(_StoreWatcher(), str(store._root), recursive=True)
+    observer.start()
+
     yield
-    # 8d: observer.stop() / observer.join() goes here
+
+    observer.stop()
+    observer.join()
 
 
 # ── 5. App + middleware ──────────────────────────────────────────────────────
@@ -1228,6 +1263,58 @@ async def profile_update(
     store.save_profile(profile)
     _flash(request, "Profile saved.", "success")
     return RedirectResponse(url=str(request.url_for("profile_page")), status_code=303)
+
+
+# ── 7g. SSE live-refresh endpoint (8d) ──────────────────────────────────────
+
+@app.get("/events", name="sse_events")
+async def sse_events(
+    request: Request,
+    _: None = Depends(require_auth),
+) -> Response:
+    """Server-Sent Events endpoint — pushes a 'reload' message whenever any
+    store file changes.
+
+    Flow:
+      1. Browser tab connects to GET /events (persistent HTTP connection).
+      2. This handler registers an asyncio.Event in _waiting and then loops,
+         waiting for the event to be set.
+      3. When watchdog detects a file change, _notify_all() sets all events.
+      4. The generator sends 'data: reload\\n\\n' and clears its event.
+      5. The browser receives the message and reloads (or shows a banner).
+
+    A 30-second heartbeat comment keeps the connection alive through proxies
+    that would otherwise close idle connections.
+    """
+    async def event_stream():
+        ev = asyncio.Event()
+        _waiting.append(ev)
+        try:
+            while True:
+                # Give up if the client has gone away
+                if await request.is_disconnected():
+                    break
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=30.0)
+                    ev.clear()
+                    yield "data: reload\n\n"
+                except asyncio.TimeoutError:
+                    # SSE comment — keeps the TCP connection alive; browsers ignore it
+                    yield ": heartbeat\n\n"
+        finally:
+            # Always deregister so the list doesn't grow with stale events
+            _waiting.remove(ev)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Tells Nginx / Caddy not to buffer SSE responses — without this,
+            # events are held until the proxy's buffer fills, breaking live reload.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── 8. Entry point ───────────────────────────────────────────────────────────

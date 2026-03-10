@@ -182,11 +182,69 @@
 <div class="flash {{ flash.category }}">{{ flash.message }}</div>
 {% endif %}
 
+<!-- SSE live-refresh banner: hidden until an MCP write arrives mid-edit -->
+<div id="sse-banner" style="
+  display: none;
+  background: #1e3a5f;
+  color: #bfdbfe;
+  font-size: 0.8rem;
+  padding: 0.4rem 1.25rem;
+  cursor: pointer;
+" onclick="window.location.reload()">
+  Changes detected — click to reload
+</div>
+
 <main>
   {% block content %}{% endblock %}
 </main>
 
 {% block scripts %}{% endblock %}
+
+<script>
+/* SSE live-refresh — reconnects to GET /events and reloads the page (or shows
+   the banner) whenever the server sends a 'reload' message.
+
+   Auto-reload is suppressed while the user has a form field focused so that
+   in-progress edits are not lost.  The banner lets them reload when ready. */
+(function () {
+  if (!window.EventSource) return;  // old browser — degrade gracefully
+
+  var banner = document.getElementById('sse-banner');
+
+  function connect() {
+    var es = new EventSource('{{ request.url_for("sse_events") }}');
+
+    es.onmessage = function (e) {
+      if (e.data !== 'reload') return;
+
+      // Check whether the user is actively typing in a form field
+      var active = document.activeElement;
+      var editing = active && (
+        active.tagName === 'INPUT' ||
+        active.tagName === 'TEXTAREA' ||
+        active.tagName === 'SELECT'
+      );
+
+      if (editing) {
+        // Surface the banner so they can reload at a safe moment
+        if (banner) banner.style.display = 'block';
+      } else {
+        window.location.reload();
+      }
+    };
+
+    es.onerror = function () {
+      // Close this connection; browser will not auto-reconnect after onerror
+      // on a closed source.  Retry after 5 s so a server restart eventually
+      // reconnects without flooding the server with rapid reconnect loops.
+      es.close();
+      setTimeout(connect, 5000);
+    };
+  }
+
+  connect();
+})();
+</script>
 
 </body>
 </html>
