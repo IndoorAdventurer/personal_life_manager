@@ -529,6 +529,12 @@ function handleDragStart(event) {
   _dragCardId = wrap.dataset.cardId;
   wrap.classList.add('dragging');
   event.dataTransfer.effectAllowed = 'move';
+  // On touch screens the default ghost image floats above the finger in an
+  // unpredictable position.  Hide it entirely — the dimmed original card is
+  // enough visual feedback.  On desktop the default ghost is kept.
+  if (window.matchMedia('(pointer: coarse)').matches) {
+    event.dataTransfer.setDragImage(new Image(), 0, 0);
+  }
 }
 
 function handleDrop(event, targetColId) {
