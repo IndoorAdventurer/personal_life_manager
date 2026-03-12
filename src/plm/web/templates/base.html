@@ -30,7 +30,12 @@
       position: sticky;
       top: 0;
       z-index: 100;
+      /* Scroll horizontally when the viewport is too narrow to fit all items.
+         scrollbar-width/display:none hides the bar without losing functionality. */
+      overflow-x: auto;
+      scrollbar-width: none;
     }
+    nav::-webkit-scrollbar { display: none; }
     .nav-brand {
       font-weight: 700;
       font-size: 1rem;
