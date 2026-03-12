@@ -71,6 +71,7 @@ seamless.
 | **Behavioral profile** | Free-form Markdown document Claude maintains about your working style, preferences, and habits — with a full audit trail |
 | **Live sync** | The web UI auto-reloads whenever Claude (or anything else) changes a data file on disk |
 | **MCP tools** | 33 tools that let Claude read and update everything — projects, cards, time blocks, inbox, and profile — without leaving the conversation |
+| **Resources** | A first-time setup prompt and reusable slash commands (e.g. `/weekly-review`) for structured planning sessions |
 
 ---
 
@@ -238,6 +239,34 @@ The MCP server exposes 33 tools across five areas:
 | **Inbox** | `add_inbox_note`, `list_inbox_notes`, `mark_inbox_note_addressed`, `delete_inbox_note` |
 | **Profile** | `get_behavioral_profile`, `get_profile_history`, `update_behavioral_profile`, `patch_behavioral_profile` |
 | **Reviews** | `get_weekly_review_data` |
+
+---
+
+## Resources
+
+The `resources/` directory contains Claude prompts that work alongside the MCP server.
+
+### First-time setup
+
+`resources/plm-init.md` contains a prompt to paste into a Claude Code session when
+you first set up PLM. It guides you through adding your projects and cards, optionally
+creating a General project for recurring habits, and building an initial behavioral
+profile. Run it once, then you're done with it.
+
+### Claude Code skills
+
+Skills are reusable slash commands you can install into Claude Code:
+
+```bash
+mkdir -p ~/.claude/commands
+ln -s /path/to/personal_life_manager/resources/weekly-review.md ~/.claude/commands/weekly-review.md
+```
+
+| Skill | Command | Description |
+|---|---|---|
+| Weekly review & planning | `/weekly-review` | Guided session: review last week, triage inbox, update behavioral profile, and plan the week ahead |
+
+Skills require the PLM MCP server to be connected in your Claude Code session.
 
 ---
 

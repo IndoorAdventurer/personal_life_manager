@@ -57,6 +57,7 @@ src/plm/
         ├── inbox.html
         └── profile.html
 tests/            # 326-test pytest suite
+resources/        # Claude prompts: first-time setup guide + reusable skills
 pyproject.toml    # packaging + dependencies
 ```
 
@@ -152,6 +153,19 @@ httpx>=0.27.0
 - **Forms**: use `Form("")` (not `Form(...)`) for user-typed name fields — FastAPI's
   422 fires before the handler for missing required fields; validate inside the handler
   instead and return a user-friendly flash error.
+
+---
+
+## Resources (Claude prompts)
+
+The `resources/` directory contains two prompts:
+
+| File | Purpose |
+|---|---|
+| `plm-init.md` | One-time setup: paste into a Claude Code session to add projects, create a General project, and build an initial behavioral profile |
+| `weekly-review.md` | Reusable skill: symlink to `~/.claude/commands/` and invoke with `/weekly-review` to run a weekly review and planning session |
+
+If a user mentions they haven't set up their projects or profile yet, point them to `resources/plm-init.md`.
 
 ---
 
