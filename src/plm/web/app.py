@@ -10,7 +10,7 @@ Environment variables (resolved at startup):
   PLM_SESSION_SECRET  — cookie signing key      (required; app refuses to start if unset)
   PLM_DATA_DIR        — override data directory (optional)
   PLM_ROOT_PATH       — e.g. "/plm" when Caddy reverse-proxies at a subpath (optional)
-  PLM_PORT            — listening port (optional, default 8000)
+  PLM_PORT            — listening port (optional, default 2026)
 """
 
 # ── 1. Imports ──────────────────────────────────────────────────────────────
@@ -1333,7 +1333,7 @@ def main() -> None:
             "Example: PLM_SESSION_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))') plm-web"
         )
 
-    port = int(os.environ.get("PLM_PORT", "8000"))
+    port = int(os.environ.get("PLM_PORT", "2026"))
 
     # root_path tells uvicorn (and FastAPI) the URL prefix under which the app
     # is mounted when behind a reverse proxy like Caddy at /plm/.

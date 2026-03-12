@@ -76,7 +76,7 @@ export PLM_SESSION_SECRET="a-long-random-string"
 # Run MCP server (stdio transport — used by Claude Code)
 plm-mcp
 
-# Run web UI (default port 8000)
+# Run web UI (default port 2026)
 plm-web
 
 # Override data dir (useful for testing)

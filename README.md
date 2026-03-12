@@ -154,7 +154,7 @@ a systemd user service, and a Caddy reverse proxy.
 
 ```bash
 plm-web
-# → http://localhost:8000
+# → http://localhost:2026  (or whatever PLM_PORT is set to)
 ```
 
 ### Connect the MCP server to Claude Code
@@ -195,7 +195,7 @@ pytest -v
 | `PLM_PASSWORD` | Yes | — | Login password for the web UI |
 | `PLM_SESSION_SECRET` | Yes | — | Key used to sign session cookies |
 | `PLM_DATA_DIR` | No | `~/.local/share/plm/` | Override data directory |
-| `PLM_PORT` | No | `8000` | Web UI listening port |
+| `PLM_PORT` | No | `2026` | Web UI listening port |
 | `PLM_ROOT_PATH` | No | `""` | Subpath prefix for reverse-proxy deployments (e.g. `/plm`) |
 
 ---

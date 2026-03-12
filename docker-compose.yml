@@ -1,0 +1,33 @@
+# Personal Life Manager — Docker Compose
+#
+# Quick start:
+#   1. cp .env.example .env   (then edit .env with your password + secret)
+#   2. docker compose up -d --build
+#
+# Update workflow (after git pull):
+#   docker compose up -d --build
+#
+# Useful commands:
+#   docker compose logs -f          # follow logs
+#   docker compose stop             # stop without removing
+#   docker compose down             # stop + remove container
+
+services:
+  plm:
+    build: .
+    restart: unless-stopped
+    ports:
+      # Both sides use PLM_PORT so host and container are always on the same port.
+      # Defaults to 2026 if PLM_PORT is not set in .env.
+      - "${PLM_PORT:-2026}:${PLM_PORT:-2026}"
+    volumes:
+      # Data lives on the host so Syncthing keeps working and data survives rebuilds.
+      - ${HOME}/.local/share/plm:/data
+    environment:
+      # Tell the app where the bind-mounted data directory is.
+      PLM_DATA_DIR: /data
+      # Secrets — required. Set in .env (never commit .env).
+      PLM_PASSWORD: ${PLM_PASSWORD}
+      PLM_SESSION_SECRET: ${PLM_SESSION_SECRET}
+      # Optional — set PLM_ROOT_PATH if Caddy reverse-proxies at a subpath (e.g. /plm).
+      PLM_ROOT_PATH: ${PLM_ROOT_PATH:-}

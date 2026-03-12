@@ -56,7 +56,7 @@ mkdir -p ~/.config/plm
 cat > ~/.config/plm/env <<'EOF'
 PLM_PASSWORD=change-me
 PLM_SESSION_SECRET=use-a-long-random-string-here
-PLM_PORT=8000
+PLM_PORT=2026
 # PLM_DATA_DIR=~/.local/share/plm   # uncomment to override
 # PLM_ROOT_PATH=/plm                 # uncomment if behind a reverse proxy
 EOF
@@ -135,8 +135,8 @@ systemctl --user status plm-web
 journalctl --user -u plm-web -f
 ```
 
-The web UI is now available at `http://<pi-hostname>.local:8000` from any device on
-your LAN.
+The web UI is now available at `http://<pi-hostname>.local:2026` from any device on
+your LAN (replace `2026` with your `PLM_PORT` if you changed it).
 
 ---
 
@@ -147,7 +147,7 @@ your LAN.
 hostname -I
 
 # Most modern home routers also support mDNS, so you can use:
-# http://raspberrypi.local:8000
+# http://raspberrypi.local:2026
 # (replace "raspberrypi" with whatever you named your Pi)
 ```
 
@@ -174,7 +174,7 @@ Edit `/etc/caddy/Caddyfile`.
 
 ```
 your.domain.com {
-    reverse_proxy localhost:8000
+    reverse_proxy localhost:2026
 }
 ```
 
@@ -187,7 +187,7 @@ your.domain.com {
     # Use handle_path here, NOT handle — handle passes the full /plm/... path
     # to the app, which then sees it doubled (/plm/plm/...) and returns 404s.
     handle_path /plm/* {
-        reverse_proxy localhost:8000
+        reverse_proxy localhost:2026
     }
 
     # Other services on the same domain:
@@ -232,40 +232,25 @@ sudo usermod -aG docker $USER
 docker run hello-world
 ```
 
-### Build the image
+### Set up your env file
+
+The repo ships an `.env.example` template. Copy it and fill in your secrets:
 
 ```bash
-cd ~/personal_life_manager   # wherever you cloned the repo
-docker build -t plm .
+cd ~/personal_life_manager
+cp .env.example .env
 ```
 
-The first build downloads the base Python image (~50 MB compressed) and installs
-dependencies. Subsequent rebuilds reuse cached layers and are much faster.
+Edit `.env`:
 
-### Run the container
-
-```bash
-docker run -d \
-  --name plm \
-  --restart unless-stopped \
-  -p 8000:8000 \
-  -v ~/.local/share/plm:/data \
-  -e PLM_DATA_DIR=/data \
-  -e PLM_ROOT_PATH=/plm \
-  -e PLM_PASSWORD=your-password \
-  -e PLM_SESSION_SECRET=your-long-random-secret \
-  plm
 ```
+PLM_PASSWORD=change-me
+PLM_SESSION_SECRET=use-a-long-random-string-here
 
-Key flags explained:
-- `-d` — run in the background (detached)
-- `--restart unless-stopped` — auto-start at boot and restart on crash
-- `-v ~/.local/share/plm:/data` — bind-mount the host data directory into the container.
-  Data is stored on the host, not inside the container, so Syncthing keeps working and
-  data survives container rebuilds.
-- `-e PLM_DATA_DIR=/data` — tell the app to use the mounted directory
-- `-e PLM_ROOT_PATH=/plm` — set the subpath prefix if you're behind a reverse proxy
-  (omit if PLM gets the whole domain)
+# Optional — uncomment to override defaults:
+# PLM_PORT=2026
+# PLM_ROOT_PATH=/plm
+```
 
 Generate a good session secret:
 
@@ -273,34 +258,50 @@ Generate a good session secret:
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-### Useful Docker commands
+Keep `.env` private — it's gitignored and never committed.
+
+### Start the container
 
 ```bash
-# Check it's running
-docker ps
-
-# Follow logs
-docker logs plm -f
-
-# Stop / start
-docker stop plm
-docker start plm
+docker compose up -d --build
 ```
 
-### Updating (Docker)
+This builds the image (first time ~1–2 min; subsequent builds reuse cached layers),
+then starts the container in the background with `--restart unless-stopped` so it
+auto-starts at boot and restarts on crash.
+
+The data directory (`~/.local/share/plm/`) is bind-mounted into the container, so
+data lives on the host — Syncthing keeps working and data survives image rebuilds.
+
+### Useful commands
+
+```bash
+# Follow logs
+docker compose logs -f
+
+# Stop / start
+docker compose stop
+docker compose start
+
+# Stop and remove the container (data on host is unaffected)
+docker compose down
+```
+
+### Updating
+
+After every `git pull`, one command rebuilds and restarts:
 
 ```bash
 cd ~/personal_life_manager
 git pull
-docker build -t plm .
-docker stop plm && docker rm plm
-# Re-run the docker run command from above
+docker compose up -d --build
 ```
 
 ### Caddy with Docker
 
 The Caddy setup is identical to the direct install — see [section 5](#5-optional-caddy-reverse-proxy-https--friendly-url) above.
-Caddy proxies to `localhost:8000` regardless of whether the app runs in Docker or not.
+Caddy proxies to `localhost:2026` (or whatever `PLM_PORT` you set) regardless of
+whether the app runs in Docker or not.
 
 ---
 
