@@ -58,11 +58,17 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 # _md.markdown() returns an HTML string; Jinja2's `safe` marks it trusted for output.
 templates.env.filters["markdown"] = lambda text: _md.markdown(text or "")
 
-# _waiting / _loop: used by the SSE endpoint (sub-chunk 8d).
-# Each connected browser tab registers an asyncio.Event here; the watchdog
-# handler calls _notify_all() from the background thread via call_soon_threadsafe.
+# _waiting / _loop / _pending_notify: used by the SSE endpoint (sub-chunk 8d).
+# Each connected browser tab registers an asyncio.Event here.  The watchdog
+# handler schedules _schedule_notify() onto the event loop via
+# call_soon_threadsafe; _schedule_notify() debounces rapid bursts (e.g. a
+# Syncthing sync writing several files at once) into a single reload signal
+# fired 1 second after the last event in the burst.
 _waiting: list[asyncio.Event] = []
 _loop: asyncio.AbstractEventLoop | None = None
+# Handle for the pending debounced call; cancelled and rescheduled on each
+# new file event so only the trailing edge of a burst triggers a reload.
+_pending_notify: asyncio.TimerHandle | None = None
 
 
 # ── 3b. Planning helpers ─────────────────────────────────────────────────────
@@ -182,30 +188,60 @@ def _planned_hours(blocks: list[TimeBlock]) -> dict[str, float]:
 def _notify_all() -> None:
     """Set every waiting SSE client's asyncio.Event, triggering a reload send.
 
-    Must be called from within the event loop (use call_soon_threadsafe when
-    calling from the watchdog background thread).
+    Must be called from within the event loop — either directly via
+    call_soon_threadsafe or via loop.call_later (both run on the loop thread).
     """
     for ev in _waiting:
         ev.set()
 
 
-class _StoreWatcher(FileSystemEventHandler):
-    """Watchdog handler: fires _notify_all() whenever any store file changes.
+def _schedule_notify() -> None:
+    """Debounced entry point called from the watchdog thread via call_soon_threadsafe.
 
-    Watchdog runs in its own background thread, so we must schedule
-    _notify_all() onto the asyncio event loop via call_soon_threadsafe — direct
-    asyncio calls from a non-loop thread are not safe.
+    Cancels any previously scheduled _notify_all() and reschedules it 1 second
+    from now.  This collapses a rapid burst of file events (e.g. Syncthing
+    syncing several files at once) into a single reload signal fired 1 second
+    after the last event in the burst.
+
+    Must be called from within the event loop (safe because call_soon_threadsafe
+    puts it there).
+    """
+    global _pending_notify
+    if _pending_notify is not None:
+        # Reset the timer — the burst is still ongoing.
+        _pending_notify.cancel()
+    assert _loop is not None
+    _pending_notify = _loop.call_later(1.0, _notify_all)
+
+
+class _StoreWatcher(FileSystemEventHandler):
+    """Watchdog handler: schedules a debounced reload whenever any store file changes.
+
+    Watchdog runs in its own background thread, so we must schedule work onto
+    the asyncio event loop via call_soon_threadsafe — direct asyncio calls from
+    a non-loop thread are not safe.
     """
 
+    # Syncthing writes conflict copies and version-history files alongside the
+    # real data files.  These patterns identify Syncthing-internal paths that
+    # should never trigger a browser reload.
+    _SYNCTHING_PATTERNS = (".sync-conflict-", ".stversions", ".stfolder")
+
     def on_any_event(self, event: FileSystemEvent) -> None:
-        # Ignore directory events (we care about file content changes only)
-        # and .tmp files, which are the atomic-write intermediaries that
-        # immediately get replaced by os.replace() — clients should reload
-        # after the real file appears, not on the temp write.
-        if event.is_directory or str(event.src_path).endswith(".tmp"):
+        path = str(event.src_path)
+        # Ignore directory events — we care about file content changes only.
+        if event.is_directory:
+            return
+        # Ignore atomic-write intermediaries (.tmp → os.replace() → real file).
+        # Clients should reload after the real file appears, not on the temp write.
+        if path.endswith(".tmp"):
+            return
+        # Ignore Syncthing housekeeping files so a background sync doesn't
+        # spam the browser with reloads unrelated to PLM data changes.
+        if any(pat in path for pat in self._SYNCTHING_PATTERNS):
             return
         if _loop is not None:
-            _loop.call_soon_threadsafe(_notify_all)
+            _loop.call_soon_threadsafe(_schedule_notify)
 
 
 @asynccontextmanager

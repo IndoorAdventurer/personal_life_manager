@@ -214,6 +214,13 @@
   function connect() {
     var es = new EventSource('{{ request.url_for("sse_events") }}');
 
+    // Close the SSE connection as soon as the page starts unloading (navigation
+    // or refresh).  Without this the browser may deliver a stale 'reload' event
+    // to the departing page, which would call window.location.reload() and abort
+    // the navigation — making nav buttons appear broken.  Closing here also
+    // suppresses the Firefox console error about an interrupted connection.
+    window.addEventListener('beforeunload', function () { es.close(); }, { once: true });
+
     es.onmessage = function (e) {
       if (e.data !== 'reload') return;
 
