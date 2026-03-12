@@ -150,6 +150,23 @@ main { max-width: 1400px; }
   -webkit-user-select: none;
   -webkit-touch-callout: none;  /* iOS: suppress copy/share callout on long-press */
 }
+/*
+ * Resize handle: the bottom 8px of every block shows a slightly darker strip
+ * and an ns-resize cursor to hint the block is vertically resizable.
+ * The ::after pseudo-element sits inside the block (overflow:hidden clips it
+ * to the block's bounds) so the cursor override works correctly.
+ */
+.cal-block::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 0 0 4px 4px;
+  cursor: ns-resize;
+}
 .cal-block-name {
   font-weight: 600;
   display: block;
@@ -866,6 +883,25 @@ main { max-width: 1400px; }
   // happens to end at the original position (moved + returned → cancel silently).
   let moveEverMoved = false;
 
+  // ── Resizing (existing block bottom edge) state ────────────────────────────
+  let resizeBid          = null;  // block UUID
+  let resizeBlockEl      = null;  // the .cal-block DOM element being resized
+  let resizeDay          = null;  // day (fixed — resizing never changes the day)
+  let resizeOrigEnd      = null;  // original end_time string (for no-op detection)
+  let resizeStartMin     = null;  // start time in minutes (fixed during resize)
+  let resizeEndMin       = null;  // current snapped end in minutes
+  let resizePendEl       = null;  // .pending-block overlay showing the new size
+  let resizeEverResized  = false; // whether the end time ever differed from original
+  let resizeFromTouch    = false; // mirrors moveFromTouch — suppresses synthesised mouseup
+
+  // Height of the resize handle zone in pixels — must match .cal-block::after height
+  const HANDLE_PX = 8;
+
+  // Returns true when clientY falls within the bottom HANDLE_PX of a block
+  function isResizeHandle(blockEl, clientY) {
+    return clientY >= blockEl.getBoundingClientRect().bottom - HANDLE_PX;
+  }
+
   // Create a .pending-block overlay inside a column at the given position
   function makePending(col, startMin, durMin) {
     const el = document.createElement('div');
@@ -889,24 +925,39 @@ main { max-width: 1400px; }
       const blockEl = e.target.closest('.cal-block');
 
       if (blockEl) {
-        // Mousedown on an existing block — start a move gesture
         e.preventDefault();
         hidePopup();
-        mode          = 'moving';
-        moveBlockEl   = blockEl;
-        moveBid       = blockEl.dataset.blockId;
-        moveOrigDay   = blockEl.dataset.day;
-        moveOrigSt    = blockEl.dataset.start;
-        moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
-        moveTargetCol = col;
-        moveStartMin  = fromTime(blockEl.dataset.start);
-        // Record how far below the block's top the cursor is so the block
-        // moves with the pointer rather than snapping its top to the cursor.
-        moveGrabOffsetMin = clientYToMin(e.clientY) - moveStartMin;
-        moveEverMoved     = false;
-        movePendEl    = makePending(col, moveStartMin, moveDurMin);
-        // Dim the original to signal it is being repositioned
-        blockEl.style.opacity = '0.35';
+
+        if (isResizeHandle(blockEl, e.clientY)) {
+          // ── Mousedown on resize handle — start a resize gesture ────────────
+          mode              = 'resizing';
+          resizeBlockEl     = blockEl;
+          resizeBid         = blockEl.dataset.blockId;
+          resizeDay         = blockEl.dataset.day;
+          resizeOrigEnd     = blockEl.dataset.end;
+          resizeStartMin    = fromTime(blockEl.dataset.start);
+          resizeEndMin      = fromTime(blockEl.dataset.end);
+          resizeEverResized = false;
+          resizePendEl      = makePending(col, resizeStartMin, resizeEndMin - resizeStartMin);
+          blockEl.style.opacity = '0.35';
+        } else {
+          // ── Mousedown on block body — start a move gesture ─────────────────
+          mode          = 'moving';
+          moveBlockEl   = blockEl;
+          moveBid       = blockEl.dataset.blockId;
+          moveOrigDay   = blockEl.dataset.day;
+          moveOrigSt    = blockEl.dataset.start;
+          moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
+          moveTargetCol = col;
+          moveStartMin  = fromTime(blockEl.dataset.start);
+          // Record how far below the block's top the cursor is so the block
+          // moves with the pointer rather than snapping its top to the cursor.
+          moveGrabOffsetMin = clientYToMin(e.clientY) - moveStartMin;
+          moveEverMoved     = false;
+          movePendEl    = makePending(col, moveStartMin, moveDurMin);
+          // Dim the original to signal it is being repositioned
+          blockEl.style.opacity = '0.35';
+        }
       } else {
         // Mousedown on empty grid space — start drawing a new block
         if (!selectedPid) return;   // no project selected; ignore
@@ -948,6 +999,14 @@ main { max-width: 1400px; }
       }
       moveStartMin = newStart;
       updatePending(movePendEl, moveStartMin, moveDurMin);
+
+    } else if (mode === 'resizing') {
+      const curMin = clientYToMin(e.clientY);
+      // Clamp: end must be at least one snap unit after start, and before midnight
+      const newEnd = clamp(curMin, resizeStartMin + SNAP_MIN, 23 * 60 + 59);
+      if (newEnd !== fromTime(resizeOrigEnd)) resizeEverResized = true;
+      resizeEndMin = newEnd;
+      updatePending(resizePendEl, resizeStartMin, resizeEndMin - resizeStartMin);
     }
   });
 
@@ -1002,6 +1061,26 @@ main { max-width: 1400px; }
           end_time:   finalEnd,
         });
       }
+
+    } else if (mode === 'resizing') {
+      const finalEnd = toTime(resizeEndMin);
+
+      resizeBlockEl.style.opacity = '';
+      resizePendEl.remove();
+      resizePendEl = null;
+      mode         = null;
+
+      // Click on the handle (no resize) → show popup; genuine resize → commit
+      if (!resizeEverResized) {
+        showPopup(resizeBlockEl, e.clientX, e.clientY);
+      } else if (finalEnd !== resizeOrigEnd) {
+        postForm(blockUrl(UPD_TPL, resizeBid), {
+          week:       WEEK,
+          day:        resizeDay,
+          start_time: toTime(resizeStartMin),
+          end_time:   finalEnd,
+        });
+      }
     }
   });
 
@@ -1016,6 +1095,10 @@ main { max-width: 1400px; }
       moveBlockEl.style.opacity = '';
       movePendEl?.remove();
       movePendEl = null;
+    } else if (mode === 'resizing') {
+      resizeBlockEl.style.opacity = '';
+      resizePendEl?.remove();
+      resizePendEl = null;
     }
     mode = null;
     hidePopup();
@@ -1069,28 +1152,41 @@ main { max-width: 1400px; }
 
       longPressTimer = setTimeout(() => {
         longPressTimer = null;
-        moveFromTouch  = true;
-        // Record how far below the block's top the finger is so the block
-        // moves with the finger rather than jumping its top to the touch point.
-        moveGrabOffsetMin = clientYToMin(longPressStartY) - fromTime(blockEl.dataset.start);
-        moveEverMoved     = false;
 
         // Haptic feedback on devices that support it
         if (navigator.vibrate) navigator.vibrate(40);
 
-        // Enter move mode — mirrors the mousedown-on-block path exactly
         hidePopup();
-        mode          = 'moving';
-        moveBlockEl   = blockEl;
-        moveBid       = blockEl.dataset.blockId;
-        moveOrigDay   = blockEl.dataset.day;
-        moveOrigSt    = blockEl.dataset.start;
-        moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
-        moveTargetCol = col;
-        moveStartMin  = fromTime(blockEl.dataset.start);
-        movePendEl    = makePending(col, moveStartMin, moveDurMin);
-        // Dim the block to signal it is being repositioned (same as desktop)
-        blockEl.style.opacity = '0.35';
+
+        if (isResizeHandle(blockEl, longPressStartY)) {
+          // ── Long-press on handle → resize mode ─────────────────────────────
+          resizeFromTouch   = true;
+          mode              = 'resizing';
+          resizeBlockEl     = blockEl;
+          resizeBid         = blockEl.dataset.blockId;
+          resizeDay         = blockEl.dataset.day;
+          resizeOrigEnd     = blockEl.dataset.end;
+          resizeStartMin    = fromTime(blockEl.dataset.start);
+          resizeEndMin      = fromTime(blockEl.dataset.end);
+          resizeEverResized = false;
+          resizePendEl      = makePending(col, resizeStartMin, resizeEndMin - resizeStartMin);
+          blockEl.style.opacity = '0.35';
+        } else {
+          // ── Long-press on block body → move mode ───────────────────────────
+          moveFromTouch     = true;
+          mode              = 'moving';
+          moveBlockEl       = blockEl;
+          moveBid           = blockEl.dataset.blockId;
+          moveOrigDay       = blockEl.dataset.day;
+          moveOrigSt        = blockEl.dataset.start;
+          moveDurMin        = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
+          moveTargetCol     = col;
+          moveStartMin      = fromTime(blockEl.dataset.start);
+          moveGrabOffsetMin = clientYToMin(longPressStartY) - fromTime(blockEl.dataset.start);
+          moveEverMoved     = false;
+          movePendEl        = makePending(col, moveStartMin, moveDurMin);
+          blockEl.style.opacity = '0.35';
+        }
       }, LONG_PRESS_MS);
     }, { passive: true });   // passive — never block scroll during the hold phase
   });
@@ -1129,6 +1225,15 @@ main { max-width: 1400px; }
       }
       moveStartMin = newStart;
       updatePending(movePendEl, moveStartMin, moveDurMin);
+
+    } else if (mode === 'resizing' && resizeFromTouch) {
+      e.preventDefault();
+      const touch  = e.touches[0];
+      const curMin = clientYToMin(touch.clientY);
+      const newEnd = clamp(curMin, resizeStartMin + SNAP_MIN, 23 * 60 + 59);
+      if (newEnd !== fromTime(resizeOrigEnd)) resizeEverResized = true;
+      resizeEndMin = newEnd;
+      updatePending(resizePendEl, resizeStartMin, resizeEndMin - resizeStartMin);
     }
   }, { passive: false });
 
@@ -1165,6 +1270,25 @@ main { max-width: 1400px; }
           end_time:   finalEnd,
         });
       }
+
+    } else if (mode === 'resizing' && resizeFromTouch) {
+      resizeFromTouch = false;
+      e.preventDefault();
+
+      const finalEnd = toTime(resizeEndMin);
+      resizeBlockEl.style.opacity = '';
+      resizePendEl.remove();
+      resizePendEl = null;
+      mode         = null;
+
+      if (resizeEverResized && finalEnd !== resizeOrigEnd) {
+        postForm(blockUrl(UPD_TPL, resizeBid), {
+          week:       WEEK,
+          day:        resizeDay,
+          start_time: toTime(resizeStartMin),
+          end_time:   finalEnd,
+        });
+      }
     }
   }, { passive: false });
 
@@ -1180,6 +1304,12 @@ main { max-width: 1400px; }
       movePendEl?.remove();
       movePendEl = null;
       mode       = null;
+    } else if (mode === 'resizing' && resizeFromTouch) {
+      resizeFromTouch = false;
+      resizeBlockEl.style.opacity = '';
+      resizePendEl?.remove();
+      resizePendEl = null;
+      mode         = null;
     }
   });
 
