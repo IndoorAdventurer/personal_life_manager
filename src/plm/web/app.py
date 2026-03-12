@@ -224,6 +224,9 @@ class _StoreWatcher(FileSystemEventHandler):
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         path = str(event.src_path)
+        # DEBUG: log every file event so we can see what's firing on the Pi.
+        # Remove once the spurious-reload root cause is identified.
+        print(f"[SSE DEBUG] event={event.event_type} dir={event.is_directory} path={path}", flush=True)
         # Ignore directory events — we care about file content changes only.
         if event.is_directory:
             return
