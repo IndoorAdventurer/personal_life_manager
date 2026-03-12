@@ -582,5 +582,46 @@ document.querySelectorAll('.kanban-card').forEach(details => {
     if (wrap) wrap.draggable = !details.open;
   });
 });
+
+/*
+ * Scroll persistence — save board + per-column scroll positions to
+ * sessionStorage before any navigation, then restore on page load.
+ * Keys are cleared immediately after restoring so stale values never
+ * accumulate.
+ */
+const _board = document.getElementById('board');
+
+// Restore on load
+const _savedPage = sessionStorage.getItem('plm-board-page-scroll');
+if (_savedPage !== null) {
+  sessionStorage.removeItem('plm-board-page-scroll');
+  window.scrollTo(0, parseInt(_savedPage, 10));
+}
+const _savedBoard = sessionStorage.getItem('plm-board-scroll');
+if (_savedBoard !== null) {
+  sessionStorage.removeItem('plm-board-scroll');
+  if (_board) _board.scrollLeft = parseInt(_savedBoard, 10);
+}
+document.querySelectorAll('.board-col').forEach(col => {
+  const key   = 'plm-col-scroll-' + col.dataset.colId;
+  const saved = sessionStorage.getItem(key);
+  if (saved !== null) {
+    sessionStorage.removeItem(key);
+    const cards = col.querySelector('.col-cards');
+    if (cards) cards.scrollTop = parseInt(saved, 10);
+  }
+});
+
+// Save before any navigation / form submit
+window.addEventListener('beforeunload', () => {
+  sessionStorage.setItem('plm-board-page-scroll', window.scrollY);
+  if (_board) sessionStorage.setItem('plm-board-scroll', _board.scrollLeft);
+  document.querySelectorAll('.board-col').forEach(col => {
+    const cards = col.querySelector('.col-cards');
+    if (cards) {
+      sessionStorage.setItem('plm-col-scroll-' + col.dataset.colId, cards.scrollTop);
+    }
+  });
+});
 </script>
 {% endblock %}
