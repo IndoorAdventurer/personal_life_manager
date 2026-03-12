@@ -144,6 +144,11 @@ main { max-width: 1400px; }
   /* grab cursor signals the block is draggable; JS sets grabbing while dragging */
   cursor: grab;
   z-index: 1;
+  /* Prevent native text-selection on long-press (mobile), which would fight with
+     our long-press-to-drag gesture and trigger the OS text/search popup. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;  /* iOS: suppress copy/share callout on long-press */
 }
 .cal-block-name {
   font-weight: 600;
@@ -746,6 +751,7 @@ main { max-width: 1400px; }
   function postForm(url, fields) {
     sessionStorage.setItem('plm-page-scroll', window.scrollY);
     sessionStorage.setItem('plm-grid-scroll', calScroll.scrollTop);
+    if (selectedPid) sessionStorage.setItem('plm-selected-pid', selectedPid);
     const f = document.createElement('form');
     f.method = 'post';
     f.action = url;
@@ -775,8 +781,14 @@ main { max-width: 1400px; }
 
   chips.forEach(chip => chip.addEventListener('click', () => selectChip(chip.dataset.pid)));
 
-  // Auto-select the first project so the grid is immediately usable on load
-  if (chips.length) selectChip(chips[0].dataset.pid);
+  // Restore the previously selected project after a postForm navigation;
+  // fall back to the first chip on a fresh load.
+  const _savedPid = sessionStorage.getItem('plm-selected-pid');
+  sessionStorage.removeItem('plm-selected-pid');
+  if (chips.length) {
+    const restoredChip = _savedPid && chips.find(c => c.dataset.pid === _savedPid);
+    selectChip(restoredChip ? _savedPid : chips[0].dataset.pid);
+  }
 
   // ── Block popup ────────────────────────────────────────────────────────────
 
@@ -845,6 +857,14 @@ main { max-width: 1400px; }
   let moveTargetCol= null;    // current .cal-day-col under the pointer
   let moveStartMin = null;    // current snapped start in minutes
   let movePendEl   = null;    // .pending-block overlay for the ghost position
+  // How far below the block's top the user grabbed it (in minutes).  Subtracted
+  // during drag so the block follows the pointer naturally instead of snapping
+  // its top edge to the cursor/finger.  Shared by mouse and touch paths.
+  let moveGrabOffsetMin = 0;
+  // Whether the block was ever moved to a different position during this drag.
+  // Distinguishes a true click (never moved → show popup) from a drag that
+  // happens to end at the original position (moved + returned → cancel silently).
+  let moveEverMoved = false;
 
   // Create a .pending-block overlay inside a column at the given position
   function makePending(col, startMin, durMin) {
@@ -880,6 +900,10 @@ main { max-width: 1400px; }
         moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
         moveTargetCol = col;
         moveStartMin  = fromTime(blockEl.dataset.start);
+        // Record how far below the block's top the cursor is so the block
+        // moves with the pointer rather than snapping its top to the cursor.
+        moveGrabOffsetMin = clientYToMin(e.clientY) - moveStartMin;
+        moveEverMoved     = false;
         movePendEl    = makePending(col, moveStartMin, moveDurMin);
         // Dim the original to signal it is being repositioned
         blockEl.style.opacity = '0.35';
@@ -915,9 +939,14 @@ main { max-width: 1400px; }
         targetCol.appendChild(movePendEl);
         moveTargetCol = targetCol;
       }
-      // Clamp so the block can't start so late that its tail would pass midnight
-      const curMin = clientYToMin(e.clientY);
-      moveStartMin = clamp(curMin, 0, 23 * 60 + 59 - moveDurMin);
+      // Subtract the grab offset so the block moves with the cursor rather
+      // than snapping its top to the cursor position.
+      const curMin    = clientYToMin(e.clientY) - moveGrabOffsetMin;
+      const newStart  = clamp(curMin, 0, 23 * 60 + 59 - moveDurMin);
+      if (newStart !== fromTime(moveOrigSt) || moveTargetCol.dataset.day !== moveOrigDay) {
+        moveEverMoved = true;
+      }
+      moveStartMin = newStart;
       updatePending(movePendEl, moveStartMin, moveDurMin);
     }
   });
@@ -961,10 +990,11 @@ main { max-width: 1400px; }
       movePendEl = null;
       mode       = null;
 
-      // If the block didn't move, treat the gesture as a click → show popup
-      if (finalDay === moveOrigDay && finalStart === moveOrigSt) {
+      // True click (block never moved) → show popup.
+      // Drag that returned to origin → cancel silently (don't show popup).
+      if (!moveEverMoved) {
         showPopup(moveBlockEl, e.clientX, e.clientY);
-      } else {
+      } else if (finalDay !== moveOrigDay || finalStart !== moveOrigSt) {
         postForm(blockUrl(MOVE_TPL, moveBid), {
           week:       WEEK,
           day:        finalDay,
@@ -989,6 +1019,168 @@ main { max-width: 1400px; }
     }
     mode = null;
     hidePopup();
+  });
+
+  // ── Touch: long-press to move (mobile) ────────────────────────────────────
+  /*
+   * On mobile, mousemove never fires during a touch gesture, so block dragging
+   * is wired up separately using touch events.
+   *
+   * Gesture map:
+   *   Short tap on block  → existing popup (via synthesised mouse events, unchanged)
+   *   Tap on empty space  → existing 1-hour block creation (via synthesised mouse events)
+   *   Long-press on block → enter move mode; drag to reposition; lift to commit
+   *
+   * Scroll safety: touchstart is registered passive so scroll is never blocked
+   * during the hold phase.  If the finger moves more than CANCEL_PX before the
+   * timer fires the timer is cancelled and the browser continues scrolling
+   * normally.  Only after the long-press is confirmed (timer fires) do
+   * subsequent touchmove events call preventDefault to freeze the page while
+   * the block is being dragged.
+   */
+  const LONG_PRESS_MS = 350;   // hold duration (ms) before move mode activates
+  const CANCEL_PX     = 8;     // finger travel (px) that cancels the long-press
+
+  let longPressTimer   = null;
+  let longPressBlockEl = null;
+  let longPressCol     = null;
+  let longPressStartX  = 0;
+  let longPressStartY  = 0;
+  // Distinguishes a touch-initiated move from a mouse-initiated one so the
+  // mouseup handler doesn't double-process the same gesture.
+  let moveFromTouch    = false;
+
+  // Suppress the Android "Google search / copy" context menu that fires on
+  // long-press — we're using that gesture for dragging, not text selection.
+  calOuter.addEventListener('contextmenu', e => {
+    if (e.target.closest('.cal-block')) e.preventDefault();
+  });
+
+  dayCols.forEach(col => {
+    col.addEventListener('touchstart', e => {
+      const blockEl = e.target.closest('.cal-block');
+      if (!blockEl) return;   // empty space — synthesised mouse events handle creation
+
+      const touch      = e.touches[0];
+      longPressBlockEl = blockEl;
+      longPressCol     = col;
+      longPressStartX  = touch.clientX;
+      longPressStartY  = touch.clientY;
+
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        moveFromTouch  = true;
+        // Record how far below the block's top the finger is so the block
+        // moves with the finger rather than jumping its top to the touch point.
+        moveGrabOffsetMin = clientYToMin(longPressStartY) - fromTime(blockEl.dataset.start);
+        moveEverMoved     = false;
+
+        // Haptic feedback on devices that support it
+        if (navigator.vibrate) navigator.vibrate(40);
+
+        // Enter move mode — mirrors the mousedown-on-block path exactly
+        hidePopup();
+        mode          = 'moving';
+        moveBlockEl   = blockEl;
+        moveBid       = blockEl.dataset.blockId;
+        moveOrigDay   = blockEl.dataset.day;
+        moveOrigSt    = blockEl.dataset.start;
+        moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
+        moveTargetCol = col;
+        moveStartMin  = fromTime(blockEl.dataset.start);
+        movePendEl    = makePending(col, moveStartMin, moveDurMin);
+        // Dim the block to signal it is being repositioned (same as desktop)
+        blockEl.style.opacity = '0.35';
+      }, LONG_PRESS_MS);
+    }, { passive: true });   // passive — never block scroll during the hold phase
+  });
+
+  // touchmove must be non-passive so we can call preventDefault once a move is
+  // confirmed (passive listeners cannot cancel the browser's scroll).
+  window.addEventListener('touchmove', e => {
+    // ── Pre-longpress: cancel timer if finger moves (scroll intent) ──────────
+    if (longPressTimer !== null) {
+      const touch = e.touches[0];
+      const dx    = touch.clientX - longPressStartX;
+      const dy    = touch.clientY - longPressStartY;
+      if (Math.hypot(dx, dy) > CANCEL_PX) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      return;   // do not interfere with the browser's scroll
+    }
+
+    // ── Active move drag ─────────────────────────────────────────────────────
+    if (mode === 'moving' && moveFromTouch) {
+      e.preventDefault();   // freeze page scroll while the block is being moved
+      const touch     = e.touches[0];
+      const targetCol = colAtX(touch.clientX);
+      if (targetCol && targetCol !== moveTargetCol) {
+        moveTargetCol.removeChild(movePendEl);
+        targetCol.appendChild(movePendEl);
+        moveTargetCol = targetCol;
+      }
+      // Subtract the grab offset so the block moves with the finger rather
+      // than snapping its top to the touch point.
+      const curMin   = clientYToMin(touch.clientY) - moveGrabOffsetMin;
+      const newStart = clamp(curMin, 0, 23 * 60 + 59 - moveDurMin);
+      if (newStart !== fromTime(moveOrigSt) || moveTargetCol.dataset.day !== moveOrigDay) {
+        moveEverMoved = true;
+      }
+      moveStartMin = newStart;
+      updatePending(movePendEl, moveStartMin, moveDurMin);
+    }
+  }, { passive: false });
+
+  window.addEventListener('touchend', e => {
+    // ── Short tap: clear timer and let synthesised mouse events show popup ───
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      return;
+    }
+
+    if (mode === 'moving' && moveFromTouch) {
+      moveFromTouch = false;
+      // Suppress the synthesised mousedown/click that would otherwise fire
+      // after touchend and accidentally re-trigger the mouse move handler.
+      e.preventDefault();
+
+      const finalDay   = moveTargetCol.dataset.day;
+      const finalStart = toTime(moveStartMin);
+      const endMin     = clamp(moveStartMin + moveDurMin, moveStartMin + SNAP_MIN, 23 * 60 + 59);
+      const finalEnd   = toTime(endMin);
+
+      moveBlockEl.style.opacity = '';
+      movePendEl.remove();
+      movePendEl = null;
+      mode       = null;
+
+      // Long-press with no movement → cancel quietly (popup is for taps only)
+      if (finalDay !== moveOrigDay || finalStart !== moveOrigSt) {
+        postForm(blockUrl(MOVE_TPL, moveBid), {
+          week:       WEEK,
+          day:        finalDay,
+          start_time: finalStart,
+          end_time:   finalEnd,
+        });
+      }
+    }
+  }, { passive: false });
+
+  // Clean up gracefully if the OS interrupts the gesture (e.g. incoming call)
+  window.addEventListener('touchcancel', () => {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    if (mode === 'moving' && moveFromTouch) {
+      moveFromTouch = false;
+      moveBlockEl.style.opacity = '';
+      movePendEl?.remove();
+      movePendEl = null;
+      mode       = null;
+    }
   });
 
   // ── Initial scroll ──────────────────────────────────────────────────────────
