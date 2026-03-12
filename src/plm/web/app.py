@@ -198,11 +198,19 @@ class _StoreWatcher(FileSystemEventHandler):
     """
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        # Ignore directory events (we care about file content changes only)
-        # and .tmp files, which are the atomic-write intermediaries that
-        # immediately get replaced by os.replace() — clients should reload
-        # after the real file appears, not on the temp write.
-        if event.is_directory or str(event.src_path).endswith(".tmp"):
+        path = str(event.src_path)
+        # Ignore directory events — we care about file content changes only.
+        if event.is_directory:
+            return
+        # Only react to write events (modified, created, moved, deleted).
+        # "opened" and "closed_no_write" fire on reads too — the app reads
+        # store files on every request, which would cause an infinite reload
+        # loop: read → watchdog → reload → read → ...
+        if event.event_type not in ("modified", "created", "moved", "deleted"):
+            return
+        # Whitelist: only PLM data files (.json) should trigger a reload.
+        # All real PLM store files are .json; Syncthing housekeeping files are not.
+        if not path.endswith(".json"):
             return
         if _loop is not None:
             _loop.call_soon_threadsafe(_notify_all)
