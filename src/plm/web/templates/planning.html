@@ -325,7 +325,8 @@ main { max-width: 1400px; }
   padding: 0.4rem;
   min-width: 15rem;
 }
-#block-popup button {
+#block-popup button,
+#block-popup a {
   display: block;
   width: 100%;
   text-align: left;
@@ -336,8 +337,11 @@ main { max-width: 1400px; }
   font-size: 0.85rem;
   cursor: pointer;
   color: #334155;
+  text-decoration: none;
+  box-sizing: border-box;
 }
-#block-popup button:hover { background: #f1f5f9; }
+#block-popup button:hover,
+#block-popup a:hover { background: #f1f5f9; }
 #block-popup .popup-delete { color: #dc2626; }
 #block-popup .popup-delete:hover { background: #fef2f2; }
 
@@ -444,6 +448,7 @@ main { max-width: 1400px; }
      data-del-url-tpl="{{ request.url_for('delete_block', block_id='BLOCK_ID') }}"
      data-dup-url-tpl="{{ request.url_for('duplicate_block', block_id='BLOCK_ID') }}"
      data-update-url-tpl="{{ request.url_for('update_block', block_id='BLOCK_ID') }}"
+     data-board-url-tpl="{{ request.url_for('project_detail', project_id='PROJ_ID') }}"
      data-week="{{ week }}">
 
   {# Day name header row — not inside the scroll container so it stays fixed #}
@@ -523,6 +528,7 @@ main { max-width: 1400px; }
   reads it again when a button is clicked to build the POST payload.
 #}
 <div id="block-popup">
+  <a id="popup-board-link" href="#" target="_blank">Go to board →</a>
   <button type="button" id="popup-duplicate">Duplicate block</button>
   <button type="button" id="popup-delete" class="popup-delete">Delete block</button>
   <hr class="popup-divider">
@@ -664,12 +670,13 @@ main { max-width: 1400px; }
   // ── Server URLs (read from data-* on .cal-outer to keep Jinja out of JS) ──
   // "BLOCK_ID" is a placeholder that blockUrl() replaces with the real UUID.
   const calOuter = document.querySelector('.cal-outer');
-  const ADD_URL  = calOuter.dataset.addUrl;
-  const MOVE_TPL = calOuter.dataset.moveUrlTpl;
-  const DEL_TPL  = calOuter.dataset.delUrlTpl;
-  const DUP_TPL  = calOuter.dataset.dupUrlTpl;
-  const UPD_TPL  = calOuter.dataset.updateUrlTpl;
-  const WEEK     = calOuter.dataset.week;
+  const ADD_URL   = calOuter.dataset.addUrl;
+  const MOVE_TPL  = calOuter.dataset.moveUrlTpl;
+  const DEL_TPL   = calOuter.dataset.delUrlTpl;
+  const DUP_TPL   = calOuter.dataset.dupUrlTpl;
+  const UPD_TPL   = calOuter.dataset.updateUrlTpl;
+  const BOARD_TPL = calOuter.dataset.boardUrlTpl;
+  const WEEK      = calOuter.dataset.week;
 
   const calScroll = document.getElementById('cal-scroll');
   const calInner  = calOuter.querySelector('.cal-inner');
@@ -761,6 +768,10 @@ main { max-width: 1400px; }
 
   function showPopup(blockEl, x, y) {
     popup.dataset.blockId = blockEl.dataset.blockId;
+
+    // Point the board link at this block's project
+    document.getElementById('popup-board-link').href =
+      BOARD_TPL.replace('PROJ_ID', blockEl.dataset.projectId);
 
     // Pre-populate edit form from the block's data attributes
     document.getElementById('popup-day').value   = blockEl.dataset.day;

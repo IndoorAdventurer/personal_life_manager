@@ -7,6 +7,10 @@
 /* The board needs full horizontal width, not the 1100px cap from base.html */
 main { max-width: none; padding: 1.25rem; }
 
+/* Height is managed via JS — hide scrollbar and native resize handle */
+textarea { overflow: hidden; resize: none; }
+
+
 /* ── Board header ── */
 .board-header {
   display: flex;
@@ -34,6 +38,7 @@ main { max-width: none; padding: 1.25rem; }
 /* ── Column ── */
 .board-col {
   flex: 0 0 270px;   /* fixed width so columns don't shrink on wide boards */
+  max-width: 270px;  /* prevent content from pushing the column wider */
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -65,9 +70,8 @@ main { max-width: none; padding: 1.25rem; }
   color: #1e293b;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Allow long names to wrap — column is already capped at 270px */
+  word-break: break-word;
 }
 .col-count {
   font-size: 0.75rem;
@@ -138,13 +142,27 @@ main { max-width: none; padding: 1.25rem; }
   /* Override base.html summary chevron — we use our own indicator */
   list-style: none;
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* top-align chevron when title wraps to multiple lines */
   gap: 0.35rem;
   padding: 0.45rem 0.6rem;
   font-size: 0.85rem;
   color: #1e293b;
   cursor: pointer;
   user-select: none;
+}
+/* Wraps the title + tags in a column so tags always appear below the title */
+.card-summary-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+/* Tags row below the title */
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
 }
 /* Suppress the base.html ::before chevron for both closed and open states.
    We need the [open] variant because base.html has a higher-specificity rule
@@ -163,11 +181,9 @@ main { max-width: none; padding: 1.25rem; }
 }
 .kanban-card[open] .card-chevron { transform: rotate(90deg); }
 .card-title {
-  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  word-break: break-word; /* wrap long titles rather than truncating */
 }
 /* Small indicator badges on the card summary line */
 .card-indicator {
@@ -365,16 +381,22 @@ main { max-width: none; padding: 1.25rem; }
         <details class="kanban-card">
           <summary>
             <span class="card-chevron">&#9654;</span>
-            <span class="card-title" title="{{ card.name }}">{{ card.name }}</span>
-            {% if card.estimated_workload %}
-            <span class="card-indicator">{{ card.estimated_workload }}</span>
-            {% endif %}
-            {% if card.description %}
-            <span class="card-indicator" title="Has description">&#128203;</span>
-            {% endif %}
-            {% if card.logs %}
-            <span class="card-indicator">{{ card.logs | length }} log</span>
-            {% endif %}
+            <div class="card-summary-body">
+              <span class="card-title" title="{{ card.name }}">{{ card.name }}</span>
+              {% if card.estimated_workload or card.description or card.logs %}
+              <div class="card-tags">
+                {% if card.estimated_workload %}
+                <span class="card-indicator">{{ card.estimated_workload }}</span>
+                {% endif %}
+                {% if card.description %}
+                <span class="card-indicator" title="Has description">&#128203;</span>
+                {% endif %}
+                {% if card.logs %}
+                <span class="card-indicator">{{ card.logs | length }} log</span>
+                {% endif %}
+              </div>
+              {% endif %}
+            </div>
           </summary>
 
           <!-- Expanded card body -->
@@ -390,10 +412,10 @@ main { max-width: none; padding: 1.25rem; }
               </div>
               <div class="form-group" style="margin-bottom:0.35rem">
                 <label>Description</label>
-                <textarea name="description" rows="2" style="width:100%">{{ card.description }}</textarea>
+                <textarea name="description" style="width:100%">{{ card.description }}</textarea>
               </div>
               <div class="form-group" style="margin-bottom:0.35rem">
-                <label>Estimate</label>
+                <label>Time estimate</label>
                 <input type="text" name="estimated_workload" autocomplete="off"
                        placeholder="e.g. 2h, small"
                        value="{{ card.estimated_workload if card.estimated_workload else '' }}"
@@ -534,6 +556,20 @@ function handleDrop(event, targetColId) {
  * fields places the cursor at the clicked position rather than triggering
  * a drag-start gesture.  Re-enable dragging when the card is collapsed.
  */
+/*
+ * Auto-resize textareas to fit their content, both on load and as the user
+ * types. Resetting to 'auto' first allows the textarea to shrink when text
+ * is deleted.
+ */
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+document.querySelectorAll('textarea').forEach(autoResize);
+document.addEventListener('input', e => {
+  if (e.target.tagName === 'TEXTAREA') autoResize(e.target);
+});
+
 document.querySelectorAll('.kanban-card').forEach(details => {
   details.addEventListener('toggle', () => {
     const wrap = details.closest('.kanban-card-wrap');
