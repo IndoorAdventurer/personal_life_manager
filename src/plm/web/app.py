@@ -198,7 +198,6 @@ class _StoreWatcher(FileSystemEventHandler):
     """
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        path = str(event.src_path)
         # Ignore directory events — we care about file content changes only.
         if event.is_directory:
             return
@@ -210,6 +209,10 @@ class _StoreWatcher(FileSystemEventHandler):
             return
         # Whitelist: only PLM data files (.json) should trigger a reload.
         # All real PLM store files are .json; Syncthing housekeeping files are not.
+        # For moved events, check dest_path — the store uses atomic writes
+        # (os.replace("file.tmp", "file.json")), so src_path is the .tmp file
+        # and dest_path is the final .json file.
+        path = str(getattr(event, "dest_path", None) or event.src_path)
         if not path.endswith(".json"):
             return
         if _loop is not None:
