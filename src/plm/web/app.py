@@ -222,19 +222,23 @@ class _StoreWatcher(FileSystemEventHandler):
     a non-loop thread are not safe.
     """
 
+    # Only these event types indicate that a file's content has changed.
+    # "opened" and "closed_no_write" fire on reads too (e.g. every time the
+    # app serves a page it reads the store files), which would cause an
+    # infinite reload loop: read → watchdog → reload → read → ...
+    _WRITE_EVENTS = {"modified", "created", "moved", "deleted"}
+
     def on_any_event(self, event: FileSystemEvent) -> None:
         path = str(event.src_path)
-        # DEBUG: log every file event so we can see what's firing on the Pi.
-        # Remove once the spurious-reload root cause is identified.
-        print(f"[SSE DEBUG] event={event.event_type} dir={event.is_directory} path={path}", flush=True)
         # Ignore directory events — we care about file content changes only.
         if event.is_directory:
             return
+        # Ignore read-only events (opened, closed_no_write, accessed, etc.)
+        # to avoid triggering reloads when the app reads its own store files.
+        if event.event_type not in self._WRITE_EVENTS:
+            return
         # Whitelist: only PLM data files (.json) should trigger a reload.
-        # This is safer than blacklisting specific Syncthing filenames, since
-        # Syncthing may write various housekeeping files (.stignore, index DBs,
-        # conflict markers, version-history files) that would otherwise cause
-        # spurious reloads.  All real PLM store files are .json.
+        # All real PLM store files are .json; Syncthing housekeeping files are not.
         if not path.endswith(".json"):
             return
         if _loop is not None:
