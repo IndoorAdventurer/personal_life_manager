@@ -222,23 +222,17 @@ class _StoreWatcher(FileSystemEventHandler):
     a non-loop thread are not safe.
     """
 
-    # Syncthing writes conflict copies and version-history files alongside the
-    # real data files.  These patterns identify Syncthing-internal paths that
-    # should never trigger a browser reload.
-    _SYNCTHING_PATTERNS = (".sync-conflict-", ".stversions", ".stfolder")
-
     def on_any_event(self, event: FileSystemEvent) -> None:
         path = str(event.src_path)
         # Ignore directory events — we care about file content changes only.
         if event.is_directory:
             return
-        # Ignore atomic-write intermediaries (.tmp → os.replace() → real file).
-        # Clients should reload after the real file appears, not on the temp write.
-        if path.endswith(".tmp"):
-            return
-        # Ignore Syncthing housekeeping files so a background sync doesn't
-        # spam the browser with reloads unrelated to PLM data changes.
-        if any(pat in path for pat in self._SYNCTHING_PATTERNS):
+        # Whitelist: only PLM data files (.json) should trigger a reload.
+        # This is safer than blacklisting specific Syncthing filenames, since
+        # Syncthing may write various housekeeping files (.stignore, index DBs,
+        # conflict markers, version-history files) that would otherwise cause
+        # spurious reloads.  All real PLM store files are .json.
+        if not path.endswith(".json"):
             return
         if _loop is not None:
             _loop.call_soon_threadsafe(_schedule_notify)
