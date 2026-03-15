@@ -4,8 +4,12 @@
 #   1. cp .env.example .env   (then edit .env with your password + secret)
 #   2. docker compose up -d --build
 #
+# To also run the remote MCP HTTP server (for Claude.ai):
+#   docker compose --profile mcp up -d --build
+#
 # Update workflow (after git pull):
-#   docker compose up -d --build
+#   docker compose up -d --build                        # web only
+#   docker compose --profile mcp up -d --build          # web + MCP
 #
 # Useful commands:
 #   docker compose logs -f          # follow logs
@@ -31,3 +35,28 @@ services:
       PLM_SESSION_SECRET: ${PLM_SESSION_SECRET}
       # Optional — set PLM_ROOT_PATH if Caddy reverse-proxies at a subpath (e.g. /plm).
       PLM_ROOT_PATH: ${PLM_ROOT_PATH:-}
+
+  # Remote MCP HTTP server — exposes PLM tools to Claude.ai via OAuth 2.1 (AuthKit).
+  # Gated behind the "mcp" profile so it's opt-in: docker compose --profile mcp up -d
+  plm-mcp:
+    profiles: ["mcp"]
+    build: .
+    # Override the default CMD (plm-web) with the HTTP MCP entry point.
+    command: plm-mcp-http
+    restart: unless-stopped
+    ports:
+      # Both sides use PLM_MCP_PORT so host and container are always on the same port.
+      # Defaults to 2027 if PLM_MCP_PORT is not set in .env.
+      - "${PLM_MCP_PORT:-2027}:${PLM_MCP_PORT:-2027}"
+    volumes:
+      # Same bind-mount as the web service — both processes read/write the same data.
+      - ${HOME}/.local/share/plm:/data
+    environment:
+      PLM_DATA_DIR: /data
+      PLM_MCP_PORT: ${PLM_MCP_PORT:-2027}
+      # WorkOS AuthKit domain (e.g. true-dragon-76-staging.authkit.app).
+      # Required — AuthKitProvider uses this to fetch the JWKS for token validation.
+      WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
+      # Public base URL of this MCP server (e.g. https://yourdomain/plm-mcp).
+      # Required — used in OAuth metadata discovery responses.
+      PLM_MCP_BASE_URL: ${PLM_MCP_BASE_URL}
