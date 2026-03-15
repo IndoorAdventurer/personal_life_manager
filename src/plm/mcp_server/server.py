@@ -192,7 +192,12 @@ def update_project(
     description: str | None = None,
     target_weekly_hours: float | None = None,
 ) -> dict:
-    """Update project metadata. Only the provided fields are changed."""
+    """
+    Update project metadata. Only the provided fields are changed.
+
+    Omitting a field (or passing None) leaves it unchanged — this tool cannot
+    clear a field back to None/empty.
+    """
     project = _require_project(project_id)
     if name is not None:
         project.name = name
@@ -320,6 +325,7 @@ def list_cards(project_id: str, column_id: str) -> dict:
     Return all cards in a specific column (id, name, estimated_workload).
 
     Lighter than get_project() when you only need one column's cards.
+    If you don't have the column_id yet, call list_columns(project_id) first.
     """
     project = _require_project(project_id)
     col = next((c for c in project.board.columns if c.id == column_id), None)
@@ -355,7 +361,13 @@ def add_card(
     description: str = "",
     estimated_workload: str | None = None,
 ) -> dict:
-    """Add a new card to a specific column."""
+    """
+    Add a new card to a specific column.
+
+    Both project_id and column_id are required — column_id alone is not
+    sufficient to identify the destination.  If you don't have the column_id
+    yet, call list_columns(project_id) first to get it.
+    """
     project = _require_project(project_id)
     col = next((c for c in project.board.columns if c.id == column_id), None)
     if col is None:
@@ -420,7 +432,12 @@ def update_card(
     description: str | None = None,
     estimated_workload: str | None = None,
 ) -> dict:
-    """Update card fields. Only the provided fields are changed."""
+    """
+    Update card fields. Only the provided fields are changed.
+
+    Omitting a field (or passing None) leaves it unchanged — this tool cannot
+    clear a field back to None/empty; use an explicit empty string for that.
+    """
     project, _col, card = _require_card(project_id, card_id)
     if name is not None:
         card.name = name
@@ -505,6 +522,7 @@ def add_time_block(
     Add a time block to a weekly plan.
 
     Creates the plan for the week if it doesn't exist yet.
+    week must be an ISO week string, e.g. '2026-W10'.
     day must be one of: monday tuesday wednesday thursday friday saturday sunday.
     start_time / end_time must be 'HH:MM', and end_time must be after start_time
     (blocks spanning midnight are not supported — split into two blocks instead).
@@ -540,7 +558,12 @@ def add_time_block(
 
 @mcp.tool()
 def remove_time_block(week: str, block_id: str) -> dict:
-    """Remove a time block from a weekly plan."""
+    """
+    Remove a time block from a weekly plan.
+
+    week must be an ISO week string, e.g. '2026-W10'.
+    block_id is returned by add_time_block() and is also present in get_plan().
+    """
     plan = store.get_plan(week)
     if plan is None:
         raise ValueError(f"No plan found for week {week!r}")
@@ -567,6 +590,8 @@ def update_time_block(
     """
     Update fields on an existing time block. Only provided fields are changed.
 
+    week must be an ISO week string, e.g. '2026-W10'.
+    block_id is returned by add_time_block() and is also present in get_plan().
     After applying changes, end_time must still be after start_time.
     """
     plan = store.get_plan(week)

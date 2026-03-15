@@ -130,6 +130,27 @@ main { max-width: 1400px; }
 }
 .cal-hour-line.major { border-color: #e2e8f0; }
 
+/* Current-time indicator — injected by JS into today's day column only */
+.now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px solid #ef4444;   /* red, sits above hour-grid lines */
+  pointer-events: none;
+  z-index: 5;
+}
+/* Small circle at the left edge of the now-line to make it more visible */
+.now-line::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
 /* Time block chips */
 .cal-block {
   position: absolute;
@@ -265,6 +286,8 @@ main { max-width: 1400px; }
     flex: 0 0 100%;
     order: 3; /* push bar below the label/hours line */
   }
+  /* Hide the "click or drag…" hint — it's decorative and too wide for portrait */
+  .palette-hint { display: none; }
 }
 
 /* ── Add block form (collapsible) ────────────────────────────────────── */
@@ -461,7 +484,7 @@ main { max-width: 1400px; }
   <button type="button" class="proj-chip" data-pid="{{ p.id }}"
           style="--chip-color: {{ project_colors[p.id] }};">{{ p.name }}</button>
   {% endfor %}
-  <span class="palette-label" style="margin-left:0.5rem; font-weight:400; color:#94a3b8;">
+  <span class="palette-label palette-hint" style="margin-left:0.5rem; font-weight:400; color:#94a3b8;">
     — click or drag on the grid to add a block; drag blocks to move them
   </span>
   {% else %}
@@ -1313,6 +1336,34 @@ main { max-width: 1400px; }
     }
   });
 
+  // ── Current-time indicator ──────────────────────────────────────────────────
+  // Maps JS Date.getDay() (0 = Sunday) to the day names used in data-day attrs.
+  const JS_DAY_NAMES = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+  function updateNowLine() {
+    const now      = new Date();
+    const todayKey = JS_DAY_NAMES[now.getDay()];
+    const todayCol = calOuter.querySelector(`.cal-day-col[data-day="${todayKey}"]`);
+
+    // Remove any existing line (handles week changes or repeated calls)
+    calOuter.querySelectorAll('.now-line').forEach(el => el.remove());
+
+    // Only draw the line when viewing the current week
+    if (!todayCol) return;
+
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    const topPx   = Math.round(minutes * HOUR_PX / 60);
+
+    const line = document.createElement('div');
+    line.className = 'now-line';
+    line.style.top = `${topPx}px`;
+    todayCol.appendChild(line);
+  }
+
+  updateNowLine();
+  // Advance the line once per minute so it stays accurate without a page reload
+  setInterval(updateNowLine, 60_000);
+
   // ── Initial scroll ──────────────────────────────────────────────────────────
   // After a postForm() navigation, scroll positions are stored in sessionStorage.
   // Restore them so the user lands back where they were.
@@ -1327,7 +1378,12 @@ main { max-width: 1400px; }
     calScroll.scrollTop = parseInt(_savedGrid, 10);
     window.scrollTo(0, parseInt(_savedPage, 10));
   } else {
-    calScroll.scrollTop = {{ hour_px * 12 - 300 }};
+    // On a fresh load, scroll to centre the current time if viewing today's week,
+    // otherwise fall back to centring on noon (hour_px * 12, minus half the viewport).
+    const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+    const isCurrentWeek = calOuter.querySelector('.cal-day-col[data-day="{{ today_day }}"]') !== null;
+    const anchorPx = isCurrentWeek ? Math.round(nowMinutes * HOUR_PX / 60) : {{ hour_px * 12 }};
+    calScroll.scrollTop = anchorPx - 300;
   }
 })();
 </script>
