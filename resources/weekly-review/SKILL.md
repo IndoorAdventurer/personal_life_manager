@@ -1,3 +1,10 @@
+---
+name: weekly-review
+description: Run a weekly review and planning session using PLM data — reviews last week, updates the behavioral profile, and builds a time-block schedule for the week ahead
+disable-model-invocation: true
+allowed-tools: mcp__plm__get_weekly_review_data, mcp__plm__list_inbox_notes, mcp__plm__get_behavioral_profile, mcp__plm__get_wip_overview, mcp__plm__patch_behavioral_profile, mcp__plm__update_behavioral_profile, mcp__plm__add_time_block
+---
+
 # Weekly Review & Planning Session
 
 You are now facilitating a focused weekly review and planning session. The goal is to

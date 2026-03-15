@@ -160,8 +160,14 @@ plm-web
 
 ### Connect the MCP server to Claude Code
 
-Add this to your Claude Code MCP config (usually `~/.claude/mcp.json` or via
-`claude mcp add`):
+Run this once to register the MCP server at the user level (available in all
+your Claude Code sessions):
+
+```bash
+claude mcp add plm --scope user -- plm-mcp
+```
+
+Or add it manually to `~/.claude/mcp.json`:
 
 ```json
 {
@@ -255,11 +261,12 @@ profile. Run it once, then you're done with it.
 
 ### Claude Code skills
 
-Skills are reusable slash commands you can install into Claude Code:
+Skills are reusable slash commands you can install into Claude Code. To make
+`/weekly-review` available globally (across all your projects):
 
 ```bash
-mkdir -p ~/.claude/commands
-ln -s /path/to/personal_life_manager/resources/weekly-review.md ~/.claude/commands/weekly-review.md
+mkdir -p ~/.claude/skills
+ln -s /path/to/personal_life_manager/resources/weekly-review ~/.claude/skills/weekly-review
 ```
 
 | Skill | Command | Description |
