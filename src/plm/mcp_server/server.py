@@ -1,8 +1,8 @@
 """
 PLM MCP server — all tool definitions.
 
-Uses FastMCP (mcp.server.fastmcp.FastMCP), which turns decorated Python
-functions into MCP tools automatically.  Each function:
+Uses FastMCP (fastmcp.FastMCP), which turns decorated Python functions into
+MCP tools automatically.  Each function:
   - takes plain typed arguments (FastMCP generates the JSON schema from them)
   - returns a plain dict (FastMCP serialises it for the protocol)
   - raises ValueError for user-facing errors (invalid ids, constraint violations)
@@ -11,12 +11,19 @@ The JsonStore is instantiated once at module load time so all tools share the
 same data-directory resolution (PLM_DATA_DIR env var or ~/.local/share/plm/).
 Passing the store as a module-level singleton also makes it easy to swap in a
 test store by patching `plm.mcp_server.server.store` in tests.
+
+Auth is constructed conditionally at module level so the same `mcp` instance
+works for both transports:
+  - stdio (main_stdio): no auth — dev machine only, no env vars needed.
+  - HTTP  (main_http):  AuthKit OAuth 2.1 — only active when the WorkOS env
+    vars are present (Docker on the Pi).
 """
 
+import os
 import warnings
 from datetime import datetime, timezone
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from plm.models.card import CardLog, KanbanCard
 from plm.models.column import KanbanColumn
@@ -26,7 +33,27 @@ from plm.models.profile import BehavioralProfile, ProfileUpdate
 from plm.models.project import Project
 from plm.storage.store import JsonStore
 
-mcp = FastMCP("Personal Life Manager")
+# ---------------------------------------------------------------------------
+# Auth (HTTP transport only)
+# ---------------------------------------------------------------------------
+
+# Auth is only constructed when both WorkOS env vars are set.  On the dev
+# machine running stdio they are never set, so _auth stays None and FastMCP
+# skips auth entirely — correct for local use.
+_authkit_domain = os.environ.get("WORKOS_AUTHKIT_DOMAIN")
+_mcp_base_url = os.environ.get("PLM_MCP_BASE_URL")
+
+if _authkit_domain and _mcp_base_url:
+    from fastmcp.server.auth.providers.workos import AuthKitProvider  # type: ignore[import]
+
+    _auth = AuthKitProvider(
+        authkit_domain=_authkit_domain,
+        base_url=_mcp_base_url,
+    )
+else:
+    _auth = None
+
+mcp = FastMCP("Personal Life Manager", auth=_auth)
 
 # Module-level store — one instance shared by all tools.  Tests override this
 # by doing:  import plm.mcp_server.server as srv; srv.store = JsonStore(tmp_dir)
@@ -877,9 +904,18 @@ def get_weekly_review_data(week: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry points
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    """Run the MCP server over stdio (invoked via the plm-mcp entry point)."""
+def main_stdio() -> None:
+    """stdio transport — local Claude Code use (plm-mcp entry point)."""
     mcp.run()
+
+
+def main_http() -> None:
+    """Streamable HTTP transport — remote Claude.ai use (plm-mcp-http entry point)."""
+    mcp.run(
+        transport="http",
+        host="0.0.0.0",
+        port=int(os.environ.get("PLM_MCP_PORT", 2027)),
+    )

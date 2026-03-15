@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "MCP server + web UI for personal productivity (Kanban, planning, inbox, profile)"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.0.0",
+    # fastmcp is the upstream of mcp.server.fastmcp (absorbed by Anthropic); the
+    # standalone package adds HTTP transport + auth providers (AuthKit) that we need
+    # for the remote MCP server. mcp itself stays as a transitive dependency.
+    "fastmcp>=3.1.1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "jinja2>=3.1.0",
@@ -33,9 +36,12 @@ dev = [
     "httpx>=0.27.0",
 ]
 
-# Entry points so `plm-mcp` and `plm-web` work after `pip install -e .`
+# Entry points so `plm-mcp`, `plm-mcp-http`, and `plm-web` work after install.
+# plm-mcp      — stdio transport, local Claude Code use
+# plm-mcp-http — Streamable HTTP transport, remote Claude.ai use (needs WorkOS env vars)
 [project.scripts]
-plm-mcp = "plm.mcp_server.server:main"
+plm-mcp = "plm.mcp_server.server:main_stdio"
+plm-mcp-http = "plm.mcp_server.server:main_http"
 plm-web = "plm.web.app:main"
 
 [tool.hatch.build.targets.wheel]
