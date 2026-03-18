@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}PLM{% endblock %}</title>
+  <link rel="icon" href="{{ request.url_for('static', path='logo-nav.svg') }}" type="image/svg+xml">
+  <link rel="manifest" href="{{ request.url_for('manifest') }}">
+  <meta name="theme-color" content="#0f172a">
   <style>
     /* ── Reset + base ─────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -25,7 +28,7 @@
       display: flex;
       align-items: center;
       padding: 0 1.25rem;
-      height: 3rem;
+      height: 4rem;
       gap: 1.25rem;
       position: sticky;
       top: 0;
@@ -37,11 +40,14 @@
     }
     nav::-webkit-scrollbar { display: none; }
     .nav-brand {
-      font-weight: 700;
-      font-size: 1rem;
-      color: #f8fafc;
-      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
       margin-right: 0.5rem;
+      flex-shrink: 0;
+    }
+    .nav-brand img {
+      height: 55px;
+      width: auto;
     }
     nav a {
       color: #94a3b8;
@@ -168,7 +174,9 @@
 <body>
 
 <nav>
-  <span class="nav-brand">PLM</span>
+  <span class="nav-brand">
+    <img src="{{ request.url_for('static', path='logo-nav.svg') }}" alt="PLM">
+  </span>
   <a href="{{ request.url_for('project_list') }}"
      {% if request.url.path == '/' %}class="active"{% endif %}>Projects</a>
   <a href="{{ request.url_for('planning_page') }}"
@@ -256,6 +264,13 @@
 
   connect();
 })();
+</script>
+
+<script>
+/* Register the PWA service worker so the app is installable. */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('{{ request.url_for("static", path="service-worker.js") }}');
+}
 </script>
 
 </body>

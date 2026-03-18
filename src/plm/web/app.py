@@ -27,7 +27,8 @@ from typing import cast
 import markdown as _md
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
@@ -240,6 +241,10 @@ async def _lifespan(app: FastAPI):
 # ── 5. App + middleware ──────────────────────────────────────────────────────
 app = FastAPI(title="Personal Life Manager", lifespan=_lifespan)
 
+# Serve static assets (logo, etc.) from the static/ directory next to this file.
+_static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 # SessionMiddleware signs cookies with itsdangerous — tamper-proof without any
 # server-side session storage.  30-day max_age is comfortable for a personal
 # tool used daily.  https_only=False keeps local dev and plain-HTTP Pi setups
@@ -292,6 +297,18 @@ def _render(request: Request, template_name: str, ctx: dict) -> HTMLResponse:
 
 
 # ── 7a. Auth routes ──────────────────────────────────────────────────────────
+
+@app.get("/manifest.json", name="manifest", include_in_schema=False)
+async def manifest(request: Request) -> Response:
+    """Render the PWA web app manifest as a Jinja2 template.
+
+    Serving via a route (rather than as a static file) lets us use
+    request.url_for() inside the template, so all icon and start_url paths
+    are correct regardless of whether the app is mounted at / or /plm/.
+    """
+    content = templates.TemplateResponse("manifest.json", {"request": request})
+    return Response(content.body, media_type="application/manifest+json")
+
 
 @app.get("/login", name="login_page")
 async def login_page(request: Request) -> Response:
