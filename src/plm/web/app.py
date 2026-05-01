@@ -257,6 +257,7 @@ app.add_middleware(
     secret_key=_PLM_SESSION_SECRET or "placeholder-replaced-at-startup",
     max_age=30 * 24 * 3600,
     https_only=False,
+    session_cookie="plm_session",
 )
 
 
