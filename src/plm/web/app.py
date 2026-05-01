@@ -294,7 +294,7 @@ def _render(request: Request, template_name: str, ctx: dict) -> HTMLResponse:
     """
     ctx.setdefault("request", request)
     ctx["flash"] = request.session.pop("flash", None)
-    return templates.TemplateResponse(template_name, ctx)
+    return templates.TemplateResponse(request, template_name, ctx)
 
 
 # ── 7a. Auth routes ──────────────────────────────────────────────────────────
