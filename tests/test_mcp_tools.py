@@ -688,6 +688,130 @@ class TestAddTimeBlock:
             )
 
 
+class TestAddTimeBlocks:
+    def test_adds_multiple_blocks(self):
+        pid = _create_project()
+        result = srv.add_time_blocks(
+            week="2026-W10",
+            blocks=[
+                {"project_id": pid, "day": "monday", "start_time": "09:00", "end_time": "11:00"},
+                {"project_id": pid, "day": "tuesday", "start_time": "14:00", "end_time": "16:00"},
+            ],
+        )
+        assert result["ok"] is True
+        assert result["added"] == 2
+        assert len(result["block_ids"]) == 2
+
+    def test_block_ids_are_distinct(self):
+        pid = _create_project()
+        result = srv.add_time_blocks(
+            week="2026-W10",
+            blocks=[
+                {"project_id": pid, "day": "monday", "start_time": "09:00", "end_time": "10:00"},
+                {"project_id": pid, "day": "monday", "start_time": "10:00", "end_time": "11:00"},
+            ],
+        )
+        assert result["block_ids"][0] != result["block_ids"][1]
+
+    def test_blocks_appear_in_plan(self):
+        pid = _create_project()
+        srv.add_time_blocks(
+            week="2026-W10",
+            blocks=[
+                {"project_id": pid, "day": "wednesday", "start_time": "09:00", "end_time": "10:00"},
+                {"project_id": pid, "day": "thursday", "start_time": "09:00", "end_time": "10:00"},
+            ],
+        )
+        plan = srv.get_plan(week="2026-W10")
+        days = {b["day"] for b in plan["time_blocks"]}
+        assert "wednesday" in days
+        assert "thursday" in days
+
+    def test_auto_creates_plan(self):
+        pid = _create_project()
+        srv.add_time_blocks(
+            week="2026-W99",
+            blocks=[{"project_id": pid, "day": "friday", "start_time": "10:00", "end_time": "11:00"}],
+        )
+        assert srv.store.get_plan("2026-W99") is not None
+
+    def test_appends_to_existing_plan(self):
+        pid = _create_project()
+        srv.add_time_block(week="2026-W10", project_id=pid, day="monday", start_time="08:00", end_time="09:00")
+        srv.add_time_blocks(
+            week="2026-W10",
+            blocks=[{"project_id": pid, "day": "tuesday", "start_time": "09:00", "end_time": "10:00"}],
+        )
+        plan = srv.get_plan(week="2026-W10")
+        assert len(plan["time_blocks"]) == 2
+
+    def test_notes_stored(self):
+        pid = _create_project()
+        srv.add_time_blocks(
+            week="2026-W10",
+            blocks=[{"project_id": pid, "day": "monday", "start_time": "09:00", "end_time": "10:00", "notes": "deep work"}],
+        )
+        plan = srv.get_plan(week="2026-W10")
+        assert plan["time_blocks"][0]["notes"] == "deep work"
+
+    def test_raises_for_invalid_day(self):
+        pid = _create_project()
+        with pytest.raises(ValueError, match=r"blocks\[0\].*day must be one of"):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[{"project_id": pid, "day": "funday", "start_time": "09:00", "end_time": "10:00"}],
+            )
+
+    def test_raises_for_end_before_start(self):
+        pid = _create_project()
+        with pytest.raises(ValueError, match=r"blocks\[0\].*end_time.*must be after"):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[{"project_id": pid, "day": "monday", "start_time": "10:00", "end_time": "09:00"}],
+            )
+
+    def test_error_includes_block_index(self):
+        """The index in the error message points to the failing block, not always [0]."""
+        pid = _create_project()
+        with pytest.raises(ValueError, match=r"blocks\[1\]"):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[
+                    {"project_id": pid, "day": "monday", "start_time": "09:00", "end_time": "10:00"},
+                    {"project_id": pid, "day": "funday", "start_time": "09:00", "end_time": "10:00"},
+                ],
+            )
+
+    def test_no_blocks_saved_when_any_invalid(self):
+        """Validation failure must be atomic — no partial writes."""
+        pid = _create_project()
+        with pytest.raises(ValueError):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[
+                    {"project_id": pid, "day": "monday", "start_time": "09:00", "end_time": "10:00"},
+                    {"project_id": pid, "day": "funday", "start_time": "09:00", "end_time": "10:00"},
+                ],
+            )
+        plan = srv.store.get_plan("2026-W10")
+        assert plan is None
+
+    def test_raises_for_unknown_project(self):
+        with pytest.raises(ValueError, match="not found"):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[{"project_id": "bad-id", "day": "monday", "start_time": "09:00", "end_time": "10:00"}],
+            )
+
+    def test_raises_for_bad_time_format(self):
+        pid = _create_project()
+        with pytest.raises(ValueError, match="HH:MM"):
+            srv.add_time_blocks(
+                week="2026-W10",
+                blocks=[{"project_id": pid, "day": "monday", "start_time": "9am", "end_time": "10:00"}],
+            )
+
+
 class TestRemoveTimeBlock:
     def test_removes_block(self):
         pid = _create_project()

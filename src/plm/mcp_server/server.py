@@ -28,7 +28,7 @@ from fastmcp import FastMCP
 from plm.models.card import CardLog, KanbanCard
 from plm.models.column import KanbanColumn
 from plm.models.inbox import InboxNote
-from plm.models.planning import TimeBlock, WeeklyPlan
+from plm.models.planning import TimeBlock, TimeBlockInput, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
 from plm.models.project import Project
 from plm.storage.store import JsonStore
@@ -581,6 +581,73 @@ def add_time_block(
     plan.updated_at = datetime.now(timezone.utc)
     store.save_plan(plan)
     return {"ok": True, "block_id": block.id, "week": week, "day": day}
+
+
+@mcp.tool()
+def add_time_blocks(week: str, blocks: list[TimeBlockInput]) -> dict:
+    """
+    Add multiple time blocks to a weekly plan in a single call.
+
+    Prefer this over repeated add_time_block() calls when scheduling several
+    blocks at once (e.g. building a full week's plan) — it uses one tool call
+    instead of one per block, which avoids hitting tool-call limits.
+
+    week: ISO week string, e.g. '2026-W10'.
+    blocks: list of block objects, each with:
+      - project_id (str, required)
+      - day        (str, required): monday/tuesday/wednesday/thursday/friday/saturday/sunday
+      - start_time (str, required): "HH:MM"
+      - end_time   (str, required): "HH:MM", must be after start_time
+      - notes      (str, optional): defaults to ""
+
+    All blocks are validated before any are saved.  If any block is invalid
+    the error message includes its 0-based index so you can fix and retry.
+    On success returns the ids of all added blocks in the same order as the
+    input list.
+
+    Creates the plan for the week if it doesn't exist yet.
+    """
+    # Coerce plain dicts to TimeBlockInput — needed when the tool is called
+    # directly in tests rather than through the FastMCP protocol layer, which
+    # would normally deserialise JSON into typed objects for us.
+    parsed: list[TimeBlockInput] = [
+        b if isinstance(b, TimeBlockInput) else TimeBlockInput.model_validate(b)
+        for b in blocks
+    ]
+
+    # Validate every block up front before touching storage — fail fast with a
+    # clear index so the caller knows exactly which entry to fix.
+    for i, b in enumerate(parsed):
+        _parse_hhmm(b.start_time, f"blocks[{i}].start_time")
+        _parse_hhmm(b.end_time, f"blocks[{i}].end_time")
+        if _hhmm_to_minutes(b.end_time) <= _hhmm_to_minutes(b.start_time):
+            raise ValueError(
+                f"blocks[{i}]: end_time ({b.end_time}) must be after "
+                f"start_time ({b.start_time}). "
+                "Blocks spanning midnight are not supported — split into two blocks."
+            )
+        if b.day not in _VALID_DAYS:
+            raise ValueError(
+                f"blocks[{i}]: day must be one of {sorted(_VALID_DAYS)}, got {b.day!r}"
+            )
+        _require_project(b.project_id)
+
+    plan = store.get_plan(week) or WeeklyPlan(week=week)
+    new_blocks: list[TimeBlock] = []
+    for b in parsed:
+        block = TimeBlock(
+            project_id=b.project_id,
+            day=b.day,
+            start_time=b.start_time,
+            end_time=b.end_time,
+            notes=b.notes,
+        )
+        plan.time_blocks.append(block)
+        new_blocks.append(block)
+
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    return {"ok": True, "added": len(new_blocks), "block_ids": [b.id for b in new_blocks]}
 
 
 @mcp.tool()

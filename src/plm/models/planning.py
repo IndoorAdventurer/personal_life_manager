@@ -20,6 +20,22 @@ class TimeBlock(BaseModel):
     notes: str = ""
 
 
+# Input model for add_time_blocks — separates the user-supplied fields from the
+# server-assigned ones (id, generated at save time).  Using a typed model rather
+# than a raw dict lets FastMCP produce a proper JSON schema, which gives LLMs
+# accurate structured guidance when calling the tool.
+class TimeBlockInput(BaseModel):
+    project_id: str
+    # day, start_time, end_time are plain strings here so that Pydantic does not
+    # validate them at construction time — the MCP tool validates them explicitly
+    # with index-tagged error messages (e.g. "blocks[2]: day must be one of …").
+    # The docstring on add_time_blocks() documents the accepted values for LLMs.
+    day: str        # monday | tuesday | wednesday | thursday | friday | saturday | sunday
+    start_time: str  # "HH:MM"
+    end_time: str    # "HH:MM"
+    notes: str = ""
+
+
 class WeeklyPlan(BaseModel):
     # ISO week string, e.g. "2026-W10" — used as the filename key in storage
     week: str
