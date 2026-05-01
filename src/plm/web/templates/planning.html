@@ -1337,18 +1337,16 @@ main { max-width: 1400px; }
   });
 
   // ── Current-time indicator ──────────────────────────────────────────────────
-  // Maps JS Date.getDay() (0 = Sunday) to the day names used in data-day attrs.
-  const JS_DAY_NAMES = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
   function updateNowLine() {
-    const now      = new Date();
-    const todayKey = JS_DAY_NAMES[now.getDay()];
-    const todayCol = calOuter.querySelector(`.cal-day-col[data-day="${todayKey}"]`);
+    const now = new Date();
 
-    // Remove any existing line (handles week changes or repeated calls)
+    // Remove any existing line (handles repeated calls)
     calOuter.querySelectorAll('.now-line').forEach(el => el.remove());
 
-    // Only draw the line when viewing the current week
+    // The server sets today-col only when viewing the current week, so if no
+    // column has that class we know we're on a different week — nothing to draw.
+    const todayCol = calOuter.querySelector('.cal-day-col.today-col');
     if (!todayCol) return;
 
     const minutes = now.getHours() * 60 + now.getMinutes();
