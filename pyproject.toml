@@ -11,7 +11,9 @@ dependencies = [
     # fastmcp is the upstream of mcp.server.fastmcp (absorbed by Anthropic); the
     # standalone package adds HTTP transport + auth providers (AuthKit) that we need
     # for the remote MCP server. mcp itself stays as a transitive dependency.
-    "fastmcp>=3.1.1",
+    # Pinned to 3.1.1: 3.2.x added RFC 8707 audience validation that requires
+    # WorkOS Resource Indicators to be enabled in the Dashboard — skip until then.
+    "fastmcp==3.1.1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "jinja2>=3.1.0",
