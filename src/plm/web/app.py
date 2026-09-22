@@ -587,6 +587,9 @@ async def move_card(
     card_id: str,
     request: Request,
     target_col_id: str = Form(...),
+    # Sent by drag-and-drop (index within the target column after the move).
+    # Omitted by the "Move to" dropdown, which appends to the end.
+    position: int | None = Form(None),
     _: None = Depends(require_auth),
 ) -> Response:
     project = store.get_project(project_id)
@@ -595,7 +598,7 @@ async def move_card(
         return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
 
     try:
-        project.board.move_card(card_id, target_col_id)
+        project.board.move_card(card_id, target_col_id, position)
     except ValueError as exc:
         _flash(request, str(exc), "error")
         return RedirectResponse(
@@ -730,7 +733,8 @@ async def reorder_column(
     project_id: str,
     col_id: str,
     request: Request,
-    direction: str = Form(...),
+    # Target index after the move, as reported by column drag-and-drop
+    position: int = Form(...),
     _: None = Depends(require_auth),
 ) -> Response:
     project = store.get_project(project_id)
@@ -738,20 +742,14 @@ async def reorder_column(
         _flash(request, "Project not found.", "error")
         return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
 
-    cols = project.board.columns
-    idx = next((i for i, c in enumerate(cols) if c.id == col_id), None)
-    if idx is None:
-        _flash(request, "Column not found.", "error")
+    try:
+        project.board.move_column(col_id, position)
+    except ValueError as exc:
+        _flash(request, str(exc), "error")
         return RedirectResponse(
             url=str(request.url_for("project_detail", project_id=project_id)),
             status_code=303,
         )
-
-    # Swap with neighbour; silently do nothing if already at the edge
-    if direction == "left" and idx > 0:
-        cols[idx], cols[idx - 1] = cols[idx - 1], cols[idx]
-    elif direction == "right" and idx < len(cols) - 1:
-        cols[idx], cols[idx + 1] = cols[idx + 1], cols[idx]
 
     store.save_project(project)
     return RedirectResponse(

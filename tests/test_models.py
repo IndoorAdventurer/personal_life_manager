@@ -313,6 +313,18 @@ class TestKanbanBoardColumnManagement:
         self.board.remove_column(extra_wip.id)
         assert extra_wip not in self.board.columns
 
+    def test_move_column_to_front(self):
+        self.board.move_column(self.done.id, 0)
+        assert [c.id for c in self.board.columns] == [self.done.id, self.wip.id]
+
+    def test_move_column_clamps_position_to_valid_range(self):
+        self.board.move_column(self.wip.id, 999)
+        assert self.board.columns[-1].id == self.wip.id
+
+    def test_move_column_raises_for_unknown_id(self):
+        with pytest.raises(ValueError, match="not found"):
+            self.board.move_column("bad-id", 0)
+
 
 # ---------------------------------------------------------------------------
 # Project

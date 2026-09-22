@@ -101,6 +101,22 @@ class KanbanBoard(BaseModel):
             self.columns.insert(position, col)
         return col
 
+    def move_column(self, column_id: str, position: int) -> None:
+        """
+        Move a column to a new index on the board (drag-and-drop reordering).
+
+        position is the column's index *after* the move, matching what the
+        drag-and-drop library reports. Out-of-range values are clamped.
+        Raises ValueError if the column is not found.
+        """
+        col = next((c for c in self.columns if c.id == column_id), None)
+        if col is None:
+            raise ValueError(f"Column {column_id!r} not found on this board")
+
+        self.columns.remove(col)
+        position = max(0, min(position, len(self.columns)))
+        self.columns.insert(position, col)
+
     def rename_column(self, column_id: str, name: str) -> None:
         """Rename a column. Raises ValueError if the column is not found."""
         col = next((c for c in self.columns if c.id == column_id), None)

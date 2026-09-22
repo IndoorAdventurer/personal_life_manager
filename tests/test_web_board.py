@@ -336,6 +336,27 @@ def test_move_card_bad_column_flashes_error(client: TestClient, store: JsonStore
     assert "not found" in resp.text.lower()
 
 
+def test_move_card_to_position(client: TestClient, store: JsonStore) -> None:
+    """Drag-and-drop sends a position; the card is inserted at that index."""
+    p = _make_project(store)
+    col_id = _first_col_id(store, p.id)
+    first = _add_card(store, p.id, col_id=col_id, name="First")
+    second = _add_card(store, p.id, col_id=col_id, name="Second")
+
+    # Reorder within the same column: move the second card to the top
+    resp = client.post(
+        f"/projects/{p.id}/cards/{second}/move",
+        data={"target_col_id": col_id, "position": "0"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    p_updated = store.get_project(p.id)
+    assert p_updated is not None
+    col = next(c for c in p_updated.board.columns if c.id == col_id)
+    assert [c.id for c in col.cards] == [second, first]
+
+
 # ---------------------------------------------------------------------------
 # Card deletion
 # ---------------------------------------------------------------------------
@@ -498,3 +519,38 @@ def test_delete_last_wip_column_flashes_error(client: TestClient, store: JsonSto
     p_updated = store.get_project(p.id)
     assert p_updated is not None
     assert len(p_updated.board.columns) == original_count
+
+
+# ---------------------------------------------------------------------------
+# Column reordering
+# ---------------------------------------------------------------------------
+
+def test_reorder_column_moves_to_position(client: TestClient, store: JsonStore) -> None:
+    """POST /projects/{id}/columns/{col_id}/reorder moves the column to the given index."""
+    p = _make_project(store)
+    original_ids = [c.id for c in p.board.columns]
+    last_id = original_ids[-1]
+
+    resp = client.post(
+        f"/projects/{p.id}/columns/{last_id}/reorder",
+        data={"position": "0"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    p_updated = store.get_project(p.id)
+    assert p_updated is not None
+    assert [c.id for c in p_updated.board.columns] == [last_id] + original_ids[:-1]
+
+
+def test_reorder_unknown_column_flashes_error(client: TestClient, store: JsonStore) -> None:
+    """Reordering a non-existent column flashes an error instead of crashing."""
+    p = _make_project(store)
+
+    resp = client.post(
+        f"/projects/{p.id}/columns/no-such-column/reorder",
+        data={"position": "0"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert "not found" in resp.text.lower()

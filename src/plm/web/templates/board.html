@@ -49,11 +49,6 @@ textarea { overflow: hidden; resize: none; }
   /* cap height so the column scrolls instead of pushing the page */
   max-height: calc(100vh - 9rem);
 }
-/* Highlight a column when a card is dragged over it */
-.board-col.drag-over {
-  background: #eff6ff;
-  border-color: #93c5fd;
-}
 
 .col-header {
   display: flex;
@@ -65,6 +60,8 @@ textarea { overflow: hidden; resize: none; }
   background: #f1f5f9;
   /* Prevent the header from shrinking when the column is tall */
   flex-shrink: 0;
+  /* The header is the drag handle for reordering columns */
+  cursor: grab;
 }
 .col-name {
   font-weight: 600;
@@ -128,9 +125,26 @@ textarea { overflow: hidden; resize: none; }
   cursor: grab;
   border-radius: 6px;
 }
-.kanban-card-wrap:active { cursor: grabbing; }
-/* Dim the card while it is being dragged */
-.kanban-card-wrap.dragging { opacity: 0.35; }
+
+/* ── SortableJS drag states ── */
+/* The item itself stays in the list and slides into place while dragging —
+   tint it so it's clear which one is moving. */
+.sortable-ghost { opacity: 0.5; outline: 2px dashed #93c5fd; outline-offset: -2px; }
+/* forceFallback renders a floating copy that follows the pointer. We hide it
+   so only the in-list item moves (avoids the "double image" look).
+   !important because SortableJS sets the copy's opacity as an inline style. */
+.sortable-fallback { opacity: 0 !important; }
+/* Keep the grab cursor during the drag (the pointer is over the hidden copy) */
+body.sortable-dragging, body.sortable-dragging * { cursor: grabbing !important; }
+/* While a card is dragged, give every card list a comfortable drop area —
+   an empty list is otherwise only as tall as its padding. Empty lists also
+   get a dashed outline to show they accept drops. */
+body.card-dragging .col-cards { min-height: 5rem; }
+body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
+  outline: 2px dashed #cbd5e1;
+  outline-offset: -0.4rem;
+  border-radius: 8px;
+}
 
 /* ── Card <details> — the expand/collapse element ── */
 .kanban-card {
@@ -296,21 +310,13 @@ textarea { overflow: hidden; resize: none; }
 <!-- ── Board ── -->
 <!--
   data-project-url is read by the drag-and-drop JS below to construct card
-  move URLs without hard-coding a URL pattern in the script.
+  and column move URLs without hard-coding a URL pattern in the script.
 -->
 <div class="board" id="board"
      data-project-url="{{ request.url_for('project_detail', project_id=project.id) }}">
 
   {% for col in project.board.columns %}
-  <!--
-    Each column is a drop target. ondragover must call preventDefault() to
-    signal that drops are accepted here; otherwise the ondrop never fires.
-  -->
-  <div class="board-col"
-       data-col-id="{{ col.id }}"
-       ondragover="event.preventDefault(); this.classList.add('drag-over')"
-       ondragleave="this.classList.remove('drag-over')"
-       ondrop="handleDrop(event, '{{ col.id }}')">
+  <div class="board-col" data-col-id="{{ col.id }}">
 
     <!-- Column header -->
     <div class="col-header">
@@ -340,20 +346,6 @@ textarea { overflow: hidden; resize: none; }
             </button>
           </form>
 
-          <!-- Reorder buttons -->
-          <div style="display:flex; gap:0.3rem; margin-top:0.4rem">
-            <form method="post" style="flex:1"
-                  action="{{ request.url_for('reorder_column', project_id=project.id, col_id=col.id) }}">
-              <input type="hidden" name="direction" value="left">
-              <button type="submit" class="btn btn-secondary btn-sm" style="width:100%">&#8592; Left</button>
-            </form>
-            <form method="post" style="flex:1"
-                  action="{{ request.url_for('reorder_column', project_id=project.id, col_id=col.id) }}">
-              <input type="hidden" name="direction" value="right">
-              <button type="submit" class="btn btn-secondary btn-sm" style="width:100%">Right &#8594;</button>
-            </form>
-          </div>
-
           <!-- Delete form — only works when the column is empty -->
           <form method="post" style="margin-top:0.4rem"
                 action="{{ request.url_for('delete_column', project_id=project.id, col_id=col.id) }}"
@@ -369,16 +361,7 @@ textarea { overflow: hidden; resize: none; }
     <!-- Cards -->
     <div class="col-cards">
       {% for card in col.cards %}
-      <!--
-        The outer div is the drag handle. Wrapping <details> in a draggable div
-        keeps drag events and click-to-expand independent — the browser treats
-        them as separate interactions.
-      -->
-      <div class="kanban-card-wrap"
-           draggable="true"
-           data-card-id="{{ card.id }}"
-           ondragstart="handleDragStart(event)"
-           ondragend="this.classList.remove('dragging')">
+      <div class="kanban-card-wrap" data-card-id="{{ card.id }}">
 
         <details class="kanban-card">
           <summary>
@@ -513,57 +496,112 @@ textarea { overflow: hidden; resize: none; }
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ request.url_for('static', path='sortable.min.js') }}"></script>
 <script>
 /*
- * Drag-and-drop for desktop.  Mobile users can use the "Move to" dropdown
- * inside each expanded card instead.
+ * Drag-and-drop via SortableJS — cards (within and across columns) and
+ * columns (dragged by their header).
  *
- * Design: we store the dragged card id in a module-level variable, then on
- * drop we POST to the move endpoint and reload.  The move endpoint returns a
- * 303 redirect back to the board, which fetch follows — after which we call
- * location.reload() to refresh the page state.
+ * Design choices:
+ * - forceFallback: SortableJS simulates the drag with pointer events instead
+ *   of native HTML5 drag-and-drop. This behaves the same on desktop and touch
+ *   and lets us hide the floating drag copy (see .sortable-fallback CSS), so
+ *   only the item in the list moves.
+ * - fallbackTolerance: a few pixels of movement are needed before a drag
+ *   starts, so a plain click still expands a card / opens a column menu.
+ * - delayOnTouchOnly: on touch screens a short press-and-hold starts the
+ *   drag; a quick swipe still scrolls the board.
+ * - After a drop we POST the new position and reload, same as the rest of
+ *   the board (the server is the source of truth for order).
  */
+const _projectUrl = document.getElementById('board').dataset.projectUrl;
 
-let _dragCardId = null;
-
-function handleDragStart(event) {
-  const wrap = event.currentTarget;
-  _dragCardId = wrap.dataset.cardId;
-  wrap.classList.add('dragging');
-  event.dataTransfer.effectAllowed = 'move';
-  // On touch screens the default ghost image floats above the finger in an
-  // unpredictable position.  Hide it entirely — the dimmed original card is
-  // enough visual feedback.  On desktop the default ghost is kept.
-  if (window.matchMedia('(pointer: coarse)').matches) {
-    event.dataTransfer.setDragImage(new Image(), 0, 0);
-  }
-}
-
-function handleDrop(event, targetColId) {
-  event.preventDefault();
-  event.currentTarget.classList.remove('drag-over');
-
-  if (!_dragCardId) return;
-  const cardId = _dragCardId;
-  _dragCardId = null;
-
-  // Build the move URL from the project base URL stored on the board element,
-  // so we don't need to hard-code a URL pattern in this script.
-  const projectUrl = document.getElementById('board').dataset.projectUrl;
-  const moveUrl = `${projectUrl}/cards/${cardId}/move`;
-
-  const body = new FormData();
-  body.append('target_col_id', targetColId);
-
-  fetch(moveUrl, { method: 'POST', body })
-    .then(() => location.reload());
-}
+const _sortableDefaults = {
+  animation: 150,
+  forceFallback: true,
+  fallbackTolerance: 4,
+  delay: 200,
+  delayOnTouchOnly: true,
+  // Don't call preventDefault on filtered elements — otherwise inputs and
+  // buttons inside them stop responding to clicks.
+  preventOnFilter: false,
+  onStart: () => document.body.classList.add('sortable-dragging'),
+};
 
 /*
- * Disable dragging while a card is expanded so that clicking inside input
- * fields places the cursor at the clicked position rather than triggering
- * a drag-start gesture.  Re-enable dragging when the card is collapsed.
+ * Releasing the pointer after a drag also counts as a click on whatever is
+ * under it — usually the dragged card's <summary>, which would expand the card
+ * for a frame before the page reloads. SortableJS only swallows that click
+ * when the item didn't move, so we swallow it ourselves after a real move.
+ * The flag is cleared shortly after in case no click follows (e.g. the
+ * pointer was released outside the item).
  */
+let _suppressNextClick = false;
+document.addEventListener('click', evt => {
+  if (!_suppressNextClick) return;
+  _suppressNextClick = false;
+  evt.preventDefault();
+  evt.stopImmediatePropagation();
+}, true);  // capture phase: runs before the <details> toggles
+
+function _postAndReload(url, fields) {
+  const body = new FormData();
+  for (const [k, v] of Object.entries(fields)) body.append(k, v);
+  fetch(url, { method: 'POST', body }).then(() => location.reload());
+}
+
+function _onDragEnd(evt) {
+  document.body.classList.remove('sortable-dragging', 'card-dragging');
+  // Dropped back where it started — nothing to save
+  const moved = !(evt.from === evt.to && evt.oldDraggableIndex === evt.newDraggableIndex);
+  if (moved) {
+    _suppressNextClick = true;
+    setTimeout(() => { _suppressNextClick = false; }, 100);
+  }
+  return moved;
+}
+
+// One Sortable per column's card list; the shared group allows moving
+// cards between columns.
+document.querySelectorAll('.col-cards').forEach(list => {
+  new Sortable(list, {
+    ..._sortableDefaults,
+    group: 'cards',
+    draggable: '.kanban-card-wrap',
+    // Expanded cards aren't draggable so that selecting text in their
+    // inputs doesn't turn into a drag.
+    filter: '.kanban-card[open]',
+    onStart: () => document.body.classList.add('sortable-dragging', 'card-dragging'),
+    onEnd: evt => {
+      if (!_onDragEnd(evt)) return;
+      const cardId = evt.item.dataset.cardId;
+      const targetColId = evt.to.closest('.board-col').dataset.colId;
+      _postAndReload(`${_projectUrl}/cards/${cardId}/move`, {
+        target_col_id: targetColId,
+        position: evt.newDraggableIndex,
+      });
+    },
+  });
+});
+
+// Columns reorder by dragging their header. The "···" menu is filtered out
+// so it stays clickable, and the "+ Add column" panel isn't draggable.
+new Sortable(document.getElementById('board'), {
+  ..._sortableDefaults,
+  draggable: '.board-col',
+  handle: '.col-header',
+  filter: '.col-actions-wrap',
+  // Keep columns to the left of the "+ Add column" panel
+  onMove: evt => !evt.related.classList.contains('add-col-panel'),
+  onEnd: evt => {
+    if (!_onDragEnd(evt)) return;
+    const colId = evt.item.dataset.colId;
+    _postAndReload(`${_projectUrl}/columns/${colId}/reorder`, {
+      position: evt.newDraggableIndex,
+    });
+  },
+});
+
 /*
  * Auto-resize textareas to fit their content, both on load and as the user
  * types. Resetting to 'auto' first allows the textarea to shrink when text
@@ -578,12 +616,6 @@ document.addEventListener('input', e => {
   if (e.target.tagName === 'TEXTAREA') autoResize(e.target);
 });
 
-document.querySelectorAll('.kanban-card').forEach(details => {
-  details.addEventListener('toggle', () => {
-    const wrap = details.closest('.kanban-card-wrap');
-    if (wrap) wrap.draggable = !details.open;
-  });
-});
 
 /*
  * Scroll persistence — save board + per-column scroll positions to
