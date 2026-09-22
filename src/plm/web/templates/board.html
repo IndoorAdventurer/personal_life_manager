@@ -250,6 +250,35 @@ body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
   font-size: 0.7rem;
   color: #94a3b8;
 }
+/* Tag badge — colour comes from the tag name (tag_color filter). The colour
+   is used for a tint + border only; text stays dark so light palette colours
+   (amber, lime, cyan) remain readable. The 8-digit hex adds alpha. */
+.tag-pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #1e293b;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Time estimate on the card summary — a solid badge in the top-right corner
+   of the summary, so it reads differently from the tinted tags and the grey
+   indicators. The summary's flex-start alignment keeps it on the first line
+   when the title wraps. */
+.card-estimate {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+  background: #0369a1;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* Workload estimate pill */
 .workload-pill {
   display: inline-block;
@@ -306,6 +335,15 @@ body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
   <span class="text-muted">{{ project.description }}</span>
   {% endif %}
 </div>
+
+<!--
+  Suggestions for the Tags fields: every tag already used on this board.
+  JS below rewrites these options as you type so they complete the tag
+  after the last comma instead of replacing the whole field.
+-->
+<datalist id="board-tags">
+  {% for tag in board_tags %}<option value="{{ tag }}"></option>{% endfor %}
+</datalist>
 
 <!-- ── Board ── -->
 <!--
@@ -368,11 +406,9 @@ body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
             <span class="card-chevron">&#9654;</span>
             <div class="card-summary-body">
               <span class="card-title" title="{{ card.name }}">{{ card.name }}</span>
-              {% if card.estimated_workload or card.description or card.logs %}
+              {# Indicators above tags, matching the order in the edit form #}
+              {% if card.description or card.logs %}
               <div class="card-tags">
-                {% if card.estimated_workload %}
-                <span class="card-indicator">{{ card.estimated_workload }}</span>
-                {% endif %}
                 {% if card.description %}
                 <span class="card-indicator" title="Has description">&#128203;</span>
                 {% endif %}
@@ -381,7 +417,20 @@ body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
                 {% endif %}
               </div>
               {% endif %}
+              {% if card.tags %}
+              <div class="card-tags">
+                {% for tag in card.tags %}
+                {% set c = tag | tag_color %}
+                <span class="tag-pill" style="background:{{ c }}26; border-color:{{ c }}">{{ tag }}</span>
+                {% endfor %}
+              </div>
+              {% endif %}
             </div>
+            {# Time estimate pinned top-right, like story points — always in the
+               same spot so it's quick to find #}
+            {% if card.estimated_workload %}
+            <span class="card-estimate" title="Time estimate">&#9201; {{ card.estimated_workload }}</span>
+            {% endif %}
           </summary>
 
           <!-- Expanded card body -->
@@ -404,6 +453,13 @@ body.card-dragging .col-cards:not(:has(.kanban-card-wrap)) {
                 <input type="text" name="estimated_workload" autocomplete="off"
                        placeholder="e.g. 2h, small"
                        value="{{ card.estimated_workload if card.estimated_workload else '' }}"
+                       style="width:100%">
+              </div>
+              <div class="form-group" style="margin-bottom:0.35rem">
+                <label>Tags</label>
+                <input type="text" name="tags" autocomplete="off" class="tags-input"
+                       list="board-tags" placeholder="e.g. v0.1, blocked"
+                       value="{{ card.tags | join(', ') }}"
                        style="width:100%">
               </div>
               <button type="submit" class="btn btn-primary btn-sm">Save</button>
@@ -600,6 +656,31 @@ new Sortable(document.getElementById('board'), {
       position: evt.newDraggableIndex,
     });
   },
+});
+
+/*
+ * Tag suggestions for a comma-separated field. A <datalist> matches against
+ * the whole input value, so after "v0.1, " it would suggest nothing. On each
+ * keystroke we rebuild the options as "<tags so far>, <suggestion>" so
+ * picking one completes just the tag being typed. Tags already in the field
+ * are left out.
+ */
+const _boardTagList = document.getElementById('board-tags');
+const _boardTags = Array.from(_boardTagList.options).map(o => o.value);
+document.addEventListener('input', e => {
+  if (!e.target.classList.contains('tags-input')) return;
+  const value = e.target.value;
+  const cut = value.lastIndexOf(',');
+  // Keep exactly what was typed after the comma (space or not) — the browser
+  // only suggests options that start with the current value. Spacing is
+  // tidied on save anyway (the field is re-rendered as "a, b").
+  const prefix = cut === -1 ? '' : value.slice(0, cut + 1) + value.slice(cut + 1).match(/^\s*/)[0];
+  const used = new Set(value.slice(0, cut + 1).split(',').map(t => t.trim().toLowerCase()));
+  _boardTagList.replaceChildren(...
+    _boardTags
+      .filter(t => !used.has(t.toLowerCase()))
+      .map(t => new Option('', prefix + t))
+  );
 });
 
 /*

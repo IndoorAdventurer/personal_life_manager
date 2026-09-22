@@ -35,7 +35,7 @@ from starlette.responses import Response
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from plm.models.card import CardLog, KanbanCard
+from plm.models.card import CardLog, KanbanCard, normalize_tags
 from plm.models.inbox import InboxNote
 from plm.models.planning import Day, TimeBlock, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
@@ -151,6 +151,20 @@ def _project_color(project_id: str) -> str:
     UUIDs have enough byte variation that adjacent IDs rarely get the same colour.
     """
     return _PROJECT_COLORS[sum(project_id.encode()) % len(_PROJECT_COLORS)]
+
+
+def _tag_color(tag: str) -> str:
+    """Deterministic colour for a card tag, from the same palette as projects.
+
+    Lowercased first so it matches the case-insensitive dedupe in
+    normalize_tags. Summing the bytes (rather than a real hash) has a useful
+    side effect: tags differing in one character, like v0.1 / v0.2 / v0.3,
+    land on neighbouring — and therefore distinct — palette colours.
+    """
+    return _PROJECT_COLORS[sum(tag.lower().encode()) % len(_PROJECT_COLORS)]
+
+
+templates.env.filters["tag_color"] = _tag_color
 
 
 def _block_top(block: TimeBlock) -> int:
@@ -495,7 +509,13 @@ async def project_detail(
     if project is None:
         _flash(request, "Project not found.", "error")
         return RedirectResponse(url=str(request.url_for("project_list")), status_code=303)
-    return _render(request, "board.html", {"project": project})
+    # Every tag used on this board, for the tag field's suggestions. Sorted
+    # case-insensitively; dedupe keeps the first spelling seen.
+    board_tags = normalize_tags(
+        [tag for col in project.board.columns for card in col.cards for tag in card.tags]
+    )
+    board_tags.sort(key=str.lower)
+    return _render(request, "board.html", {"project": project, "board_tags": board_tags})
 
 
 @app.post("/projects/{project_id}/cards", name="create_card")
@@ -547,6 +567,8 @@ async def edit_card(
     name: str = Form(...),
     description: str = Form(""),
     estimated_workload: str = Form(""),
+    # Comma-separated; an empty field clears all tags
+    tags: str = Form(""),
     _: None = Depends(require_auth),
 ) -> Response:
     project = store.get_project(project_id)
@@ -567,6 +589,8 @@ async def edit_card(
     card.description = description.strip()
     # Empty string → no workload estimate; otherwise store as-is (free text)
     card.estimated_workload = estimated_workload.strip() or None
+    # Trimming / dedupe happens in the model's validator
+    card.tags = tags.split(",")
     card.updated_at = datetime.now(timezone.utc)
     store.save_project(project)
     return RedirectResponse(

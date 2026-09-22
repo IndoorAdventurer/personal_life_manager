@@ -66,7 +66,7 @@ seamless.
 
 | Area | What you get |
 |---|---|
-| **Kanban boards** | Per-project boards with configurable columns, WIP limits, and timestamped progress logs. Drag cards to an exact position (to order by priority) and drag columns to rearrange them, on desktop and touch |
+| **Kanban boards** | Per-project boards with configurable columns, WIP limits, colour-coded tags, and timestamped progress logs. Drag cards to an exact position (to order by priority) and drag columns to rearrange them, on desktop and touch |
 | **Weekly planner** | Scrollable 24-hour calendar grid, color-coded by project, with a bar chart showing planned vs. target hours |
 | **Inbox** | Quick-capture notes that Claude can later triage, file, or act on |
 | **Behavioral profile** | Free-form Markdown document Claude maintains about your working style, preferences, and habits — with a full audit trail |

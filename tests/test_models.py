@@ -84,6 +84,24 @@ class TestKanbanCard:
         card = KanbanCard(name="D", estimated_workload="2h")
         assert card.estimated_workload == "2h"
 
+    def test_tags_default_to_empty(self):
+        # Cards saved before tags existed must still load
+        assert KanbanCard(name="Old").tags == []
+
+    def test_tags_are_trimmed_and_empties_dropped(self):
+        card = KanbanCard(name="T", tags=["  v0.1 ", "", "   ", "bug"])
+        assert card.tags == ["v0.1", "bug"]
+
+    def test_tags_dedupe_case_insensitively_keeping_first_spelling(self):
+        card = KanbanCard(name="T", tags=["v0.1", "V0.1", "Bug", "bug"])
+        assert card.tags == ["v0.1", "Bug"]
+
+    def test_tags_are_normalized_on_assignment(self):
+        # validate_assignment: the web and MCP layers assign card.tags directly
+        card = KanbanCard(name="T")
+        card.tags = [" a ", "A", ""]
+        assert card.tags == ["a"]
+
 
 # ---------------------------------------------------------------------------
 # KanbanColumn

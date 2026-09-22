@@ -349,7 +349,7 @@ def remove_column(project_id: str, column_id: str, force: bool = False) -> dict:
 @mcp.tool()
 def list_cards(project_id: str, column_id: str) -> dict:
     """
-    Return all cards in a specific column (id, name, estimated_workload).
+    Return all cards in a specific column (id, name, estimated_workload, tags).
 
     Lighter than get_project() when you only need one column's cards.
     If you don't have the column_id yet, call list_columns(project_id) first.
@@ -362,7 +362,12 @@ def list_cards(project_id: str, column_id: str) -> dict:
         "column_id": column_id,
         "column_name": col.name,
         "cards": [
-            {"id": card.id, "name": card.name, "estimated_workload": card.estimated_workload}
+            {
+                "id": card.id,
+                "name": card.name,
+                "estimated_workload": card.estimated_workload,
+                "tags": card.tags,
+            }
             for card in col.cards
         ],
     }
@@ -387,6 +392,7 @@ def add_card(
     name: str,
     description: str = "",
     estimated_workload: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict:
     """
     Add a new card to a specific column.
@@ -394,6 +400,11 @@ def add_card(
     Both project_id and column_id are required — column_id alone is not
     sufficient to identify the destination.  If you don't have the column_id
     yet, call list_columns(project_id) first to get it.
+
+    tags: short free-text labels shown as coloured badges on the card, e.g.
+    ["v0.1"]. Reuse the exact spelling of tags already on the board (see
+    list_cards) — the colour is derived from the name. Whitespace is trimmed
+    and case-insensitive duplicates are dropped.
     """
     project = _require_project(project_id)
     col = next((c for c in project.board.columns if c.id == column_id), None)
@@ -404,6 +415,7 @@ def add_card(
         name=name,
         description=description,
         estimated_workload=estimated_workload,
+        tags=tags or [],
     )
     col.cards.append(card)
     store.save_project(project)
@@ -458,12 +470,17 @@ def update_card(
     name: str | None = None,
     description: str | None = None,
     estimated_workload: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict:
     """
     Update card fields. Only the provided fields are changed.
 
     Omitting a field (or passing None) leaves it unchanged — this tool cannot
     clear a field back to None/empty; use an explicit empty string for that.
+
+    tags replaces the card's whole tag list (pass [] to remove all tags). To
+    add one tag, read the current tags first (get_card / list_cards) and pass
+    the combined list.
     """
     project, _col, card = _require_card(project_id, card_id)
     if name is not None:
@@ -472,6 +489,8 @@ def update_card(
         card.description = description
     if estimated_workload is not None:
         card.estimated_workload = estimated_workload
+    if tags is not None:
+        card.tags = tags
     card.updated_at = datetime.now(timezone.utc)
     store.save_project(project)
     return {"ok": True, "card_id": card_id}

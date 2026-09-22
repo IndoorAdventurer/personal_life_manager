@@ -409,6 +409,13 @@ class TestListCards:
         cards = srv.list_cards(project_id=pid, column_id=col_id)["cards"]
         assert any(c["id"] == card_id and c["name"] == "My Card" for c in cards)
 
+    def test_includes_tags(self):
+        pid = _create_project()
+        col_id = _first_column_id(pid)
+        srv.add_card(project_id=pid, column_id=col_id, name="Tagged", tags=["v0.1"])
+        cards = srv.list_cards(project_id=pid, column_id=col_id)["cards"]
+        assert cards[0]["tags"] == ["v0.1"]
+
     def test_raises_for_unknown_column(self):
         pid = _create_project()
         with pytest.raises(ValueError, match="not found"):
@@ -455,6 +462,15 @@ class TestAddCard:
         )
         card = srv.get_card(project_id=pid, card_id=result["card_id"])
         assert card["estimated_workload"] == "3h"
+
+    def test_stores_normalized_tags(self):
+        pid = _create_project()
+        col_id = _first_column_id(pid)
+        result = srv.add_card(
+            project_id=pid, column_id=col_id, name="T", tags=[" v0.1", "V0.1", "bug"]
+        )
+        card = srv.get_card(project_id=pid, card_id=result["card_id"])
+        assert card["tags"] == ["v0.1", "bug"]
 
     def test_raises_for_unknown_column(self):
         pid = _create_project()
@@ -531,6 +547,25 @@ class TestUpdateCard:
         card = srv.get_card(project_id=pid, card_id=card_id)
         assert card["name"] == "Keep"
         assert card["estimated_workload"] == "2h"
+
+    def test_tags_replace_whole_list_and_none_leaves_them(self):
+        pid = _create_project()
+        col_id = _first_column_id(pid)
+        card_id = srv.add_card(
+            project_id=pid, column_id=col_id, name="T", tags=["v0.1", "bug"]
+        )["card_id"]
+
+        # Omitting tags leaves them unchanged
+        srv.update_card(project_id=pid, card_id=card_id, name="Renamed")
+        assert srv.get_card(project_id=pid, card_id=card_id)["tags"] == ["v0.1", "bug"]
+
+        # Passing a list replaces them
+        srv.update_card(project_id=pid, card_id=card_id, tags=["v0.2"])
+        assert srv.get_card(project_id=pid, card_id=card_id)["tags"] == ["v0.2"]
+
+        # [] clears them
+        srv.update_card(project_id=pid, card_id=card_id, tags=[])
+        assert srv.get_card(project_id=pid, card_id=card_id)["tags"] == []
 
     def test_stamps_updated_at(self):
         pid = _create_project()

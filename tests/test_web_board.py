@@ -223,6 +223,56 @@ def test_edit_card(client: TestClient, store: JsonStore) -> None:
     assert card.estimated_workload == "3h"
 
 
+def test_edit_card_sets_tags_from_comma_separated_field(
+    client: TestClient, store: JsonStore
+) -> None:
+    """The Tags field is split on commas; the model trims and dedupes."""
+    p = _make_project(store)
+    card_id = _add_card(store, p.id)
+
+    client.post(
+        f"/projects/{p.id}/cards/{card_id}/edit",
+        data={"name": "Card", "tags": " v0.1, blocked,, V0.1 "},
+        follow_redirects=False,
+    )
+
+    p_updated = store.get_project(p.id)
+    assert p_updated is not None
+    result = p_updated.board.find_card(card_id)
+    assert result is not None
+    assert result[1].tags == ["v0.1", "blocked"]
+
+
+def test_edit_card_blank_tags_clears_them(client: TestClient, store: JsonStore) -> None:
+    """Submitting an empty Tags field removes all tags."""
+    p = _make_project(store)
+    card_id = _add_card(store, p.id)
+    client.post(f"/projects/{p.id}/cards/{card_id}/edit",
+                data={"name": "Card", "tags": "v0.1"})
+
+    client.post(f"/projects/{p.id}/cards/{card_id}/edit",
+                data={"name": "Card", "tags": ""})
+
+    p_updated = store.get_project(p.id)
+    assert p_updated is not None
+    result = p_updated.board.find_card(card_id)
+    assert result is not None
+    assert result[1].tags == []
+
+
+def test_board_shows_tags_and_suggestions(client: TestClient, store: JsonStore) -> None:
+    """Tags render as badges, and the board's tags feed the suggestion list."""
+    p = _make_project(store)
+    card_id = _add_card(store, p.id)
+    client.post(f"/projects/{p.id}/cards/{card_id}/edit",
+                data={"name": "Card", "tags": "v0.2, Blocked"})
+
+    resp = client.get(f"/projects/{p.id}")
+    assert 'class="tag-pill"' in resp.text
+    # Suggestions are sorted case-insensitively
+    assert '<option value="Blocked"></option><option value="v0.2"></option>' in resp.text
+
+
 def test_edit_card_clears_workload_when_blank(client: TestClient, store: JsonStore) -> None:
     """Submitting an empty estimated_workload clears the field (sets it to None)."""
     p = _make_project(store)
