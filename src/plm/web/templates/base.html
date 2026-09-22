@@ -215,7 +215,10 @@
 
 <script>
 /* SSE live-refresh — reconnects to GET /events and reloads the page (or shows
-   the banner) whenever the server sends a 'reload' message.
+   the banner) whenever the server sends a 'reload' message carrying a data
+   version newer than the one this page was rendered with.  Messages that are
+   not newer are late echoes of changes the page already shows (typically our
+   own POST) and are ignored — see _data_version() in app.py.
 
    Auto-reload is suppressed while the user has a form field focused so that
    in-progress edits are not lost.  The banner lets them reload when ready. */
@@ -223,6 +226,8 @@
   if (!window.EventSource) return;  // old browser — degrade gracefully
 
   var banner = document.getElementById('sse-banner');
+  // Data version this page was rendered with (µs mtime — safe as a JS number)
+  var pageVersion = {{ data_version() }};
 
   function connect() {
     var es = new EventSource('{{ request.url_for("sse_events") }}');
@@ -235,7 +240,10 @@
     window.addEventListener('beforeunload', function () { es.close(); }, { once: true });
 
     es.onmessage = function (e) {
-      if (e.data !== 'reload') return;
+      var parts = e.data.split(' ');
+      if (parts[0] !== 'reload') return;
+      // Already showing this data (or newer) — nothing to reload for
+      if (Number(parts[1]) <= pageVersion) return;
 
       // Check whether the user is actively typing in a form field
       var active = document.activeElement;

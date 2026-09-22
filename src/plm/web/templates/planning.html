@@ -784,14 +784,23 @@ main { max-width: 1400px; }
     }) || null;
   }
 
-  // Dynamically submit a POST form — keeps all server mutations as full-page
-  // requests, which means no client-side state management needed after submit.
-  // Before navigating away, snapshot both scroll positions so the page-load
-  // handler below can restore them instead of defaulting to midday.
-  function postForm(url, fields) {
+  // Snapshot scroll positions + selected project so the next load of this page
+  // can restore them (see _restoreView below). Called on pagehide so it covers
+  // every way the page goes away — our own submits, F5, and SSE live reloads.
+  // pagehide rather than beforeunload: it fires reliably on mobile (iOS Safari).
+  function saveViewState() {
     sessionStorage.setItem('plm-page-scroll', window.scrollY);
     sessionStorage.setItem('plm-grid-scroll', calScroll.scrollTop);
     if (selectedPid) sessionStorage.setItem('plm-selected-pid', selectedPid);
+  }
+  window.addEventListener('pagehide', saveViewState);
+
+  // Dynamically submit a POST form — keeps all server mutations as full-page
+  // requests, which means no client-side state management needed after submit.
+  function postForm(url, fields) {
+    // Also saved explicitly here in case pagehide doesn't fire before the
+    // form navigation on some browser.
+    saveViewState();
     const f = document.createElement('form');
     f.method = 'post';
     f.action = url;
@@ -821,9 +830,18 @@ main { max-width: 1400px; }
 
   chips.forEach(chip => chip.addEventListener('click', () => selectChip(chip.dataset.pid)));
 
-  // Restore the previously selected project after a postForm navigation;
-  // fall back to the first chip on a fresh load.
-  const _savedPid = sessionStorage.getItem('plm-selected-pid');
+  // Restore the saved view (project + scroll) only when the user stays on the
+  // planning page: a reload (F5 / SSE live reload), or a navigation that came
+  // from this page (postForm submit → redirect, week prev/next links).
+  // Arriving from elsewhere (e.g. the board) is a fresh visit: first project,
+  // scrolled to the current time.
+  const _navType = performance.getEntriesByType('navigation')[0]?.type;
+  let _fromPlanning = false;
+  try { _fromPlanning = new URL(document.referrer).pathname === location.pathname; } catch (e) {}
+  const _restoreView = _navType === 'reload' || _fromPlanning;
+
+  // Keys are always consumed so a stale snapshot is never picked up later.
+  const _savedPid = _restoreView ? sessionStorage.getItem('plm-selected-pid') : null;
   sessionStorage.removeItem('plm-selected-pid');
   if (chips.length) {
     const restoredChip = _savedPid && chips.find(c => c.dataset.pid === _savedPid);
@@ -1363,13 +1381,13 @@ main { max-width: 1400px; }
   setInterval(updateNowLine, 60_000);
 
   // ── Initial scroll ──────────────────────────────────────────────────────────
-  // After a postForm() navigation, scroll positions are stored in sessionStorage.
-  // Restore them so the user lands back where they were.
-  // On a fresh load (no stored values) fall back to centring on midday:
+  // Restore the saved scroll positions when _restoreView says so (see the
+  // project palette section), so the user lands back where they were.
+  // On a fresh load fall back to centring on the current time / midday:
   // container is 600 px tall; 12:00 is at hour_px × 12 from the top, so
   // subtracting 300 (half the container height) centres noon in the viewport.
-  const _savedPage = sessionStorage.getItem('plm-page-scroll');
-  const _savedGrid = sessionStorage.getItem('plm-grid-scroll');
+  const _savedPage = _restoreView ? sessionStorage.getItem('plm-page-scroll') : null;
+  const _savedGrid = _restoreView ? sessionStorage.getItem('plm-grid-scroll') : null;
   sessionStorage.removeItem('plm-page-scroll');
   sessionStorage.removeItem('plm-grid-scroll');
   if (_savedGrid !== null) {

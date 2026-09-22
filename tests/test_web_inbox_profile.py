@@ -13,6 +13,7 @@ read at some point.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -305,3 +306,48 @@ def test_profile_update_empty_content_clears_profile(client: TestClient, store: 
     profile = store.get_profile()
     # Stripping whitespace-only content results in empty string
     assert profile.content == ""
+
+
+# ---------------------------------------------------------------------------
+# SSE data version — used by the browser to ignore late reload echoes
+# ---------------------------------------------------------------------------
+
+def _age_data_dir(root: Path) -> None:
+    """Backdate every file and dir under root to a sentinel time (year 2001).
+
+    Makes "version went up" assertions independent of filesystem timestamp
+    resolution — same idea as the sentinel updated_at used elsewhere.
+    """
+    sentinel = 1_000_000_000  # 2001-09-09
+    for p in [root, *root.rglob("*")]:
+        os.utime(p, (sentinel, sentinel))
+
+
+def test_data_version_increases_on_write(client: TestClient, store: JsonStore) -> None:
+    """Saving a file bumps the data version."""
+    _add_note(store)
+    _age_data_dir(store._root)
+    before = app_module._data_version()
+
+    _add_note(store, "Another note")
+    assert app_module._data_version() > before
+
+
+def test_data_version_increases_on_delete(client: TestClient, store: JsonStore) -> None:
+    """Deleting a file bumps the version too (via the parent dir's mtime)."""
+    from plm.models.project import Project
+
+    p = Project(name="Doomed")
+    store.save_project(p)
+    _age_data_dir(store._root)
+    before = app_module._data_version()
+
+    store.delete_project(p.id)
+    assert app_module._data_version() > before
+
+
+def test_page_embeds_data_version(client: TestClient, store: JsonStore) -> None:
+    """Rendered pages carry the current data version for the SSE client."""
+    _add_note(store)
+    resp = client.get("/inbox")
+    assert f"var pageVersion = {app_module._data_version()};" in resp.text

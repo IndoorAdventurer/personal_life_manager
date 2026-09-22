@@ -180,6 +180,39 @@ def _planned_hours(blocks: list[TimeBlock]) -> dict[str, float]:
 
 # ── 4. Watchdog + lifespan ───────────────────────────────────────────────────
 
+def _data_version() -> int:
+    """Newest modification time (µs) across the data directory — files and dirs.
+
+    Used to drop redundant SSE reloads. Each page embeds the version it was
+    rendered with, and each reload message carries the version at send time;
+    the browser only reloads if the message's version is newer.
+
+    Why this is needed: watchdog's inotify backend occasionally reports an
+    atomic-write rename ~0.5 s late (it holds the first half of a rename while
+    waiting for its pair). By then the browser has already loaded the page
+    that followed its own POST, so without a version check that page receives
+    a reload for data it already shows — and loses its client-side state.
+
+    Directory mtimes are included so deletions (which don't touch any
+    remaining file) still bump the version. Microseconds rather than ns keep
+    the value within JavaScript's safe-integer range.
+    """
+    newest = 0
+    for dirpath, _dirnames, filenames in os.walk(store._root):
+        for p in [dirpath, *(os.path.join(dirpath, f) for f in filenames)]:
+            try:
+                newest = max(newest, os.stat(p).st_mtime_ns)
+            except FileNotFoundError:
+                # A .tmp file can vanish between listing and stat (atomic write)
+                pass
+    return newest // 1000
+
+
+# Exposed to templates so base.html can embed the version the page was
+# rendered with. Evaluated at render time, i.e. after the route read its data.
+templates.env.globals["data_version"] = _data_version
+
+
 def _notify_all() -> None:
     """Set every waiting SSE client's asyncio.Event, triggering a reload send.
 
@@ -1307,8 +1340,9 @@ async def sse_events(
       2. This handler registers an asyncio.Event in _waiting and then loops,
          waiting for the event to be set.
       3. When watchdog detects a file change, _notify_all() sets all events.
-      4. The generator sends 'data: reload\\n\\n' and clears its event.
-      5. The browser receives the message and reloads (or shows a banner).
+      4. The generator sends 'data: reload <version>\\n\\n' and clears its event.
+      5. The browser reloads (or shows a banner) only if <version> is newer
+         than the one its page was rendered with — see _data_version().
 
     A 30-second heartbeat comment keeps the connection alive through proxies
     that would otherwise close idle connections.
@@ -1324,7 +1358,9 @@ async def sse_events(
                 try:
                     await asyncio.wait_for(ev.wait(), timeout=30.0)
                     ev.clear()
-                    yield "data: reload\n\n"
+                    # Version read at send time, so a late watchdog event for a
+                    # change the page already shows carries no newer version
+                    yield f"data: reload {_data_version()}\n\n"
                 except asyncio.TimeoutError:
                     # SSE comment — keeps the TCP connection alive; browsers ignore it
                     yield ": heartbeat\n\n"
