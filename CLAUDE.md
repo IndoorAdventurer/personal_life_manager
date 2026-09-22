@@ -25,7 +25,7 @@ If you want to extend it, the same workflow works well:
 |---|---|
 | `src/plm/models/` | All Pydantic v2 data models — start here to understand the data shape |
 | `src/plm/storage/store.py` | `JsonStore` — the only persistence layer |
-| `src/plm/mcp_server/server.py` | All 33 MCP tools |
+| `src/plm/mcp_server/server.py` | All 34 MCP tools |
 | `src/plm/web/app.py` | All FastAPI routes |
 | `src/plm/web/templates/base.html` | Shared layout, styles, and SSE live-reload script |
 
@@ -44,7 +44,7 @@ src/plm/
 │   └── profile.py    # BehavioralProfile, ProfileUpdate
 ├── storage/      # JsonStore — generic atomic JSON file CRUD
 │   └── store.py
-├── mcp_server/   # FastMCP server (33 tools)
+├── mcp_server/   # FastMCP server (34 tools; stdio + HTTP entry points)
 │   └── server.py
 └── web/          # FastAPI app + Jinja2 templates
     ├── app.py
@@ -56,7 +56,7 @@ src/plm/
         ├── planning.html
         ├── inbox.html
         └── profile.html
-tests/            # 326-test pytest suite
+tests/            # 347-test pytest suite
 resources/        # Claude prompts: first-time setup guide + reusable skills
 pyproject.toml    # packaging + dependencies
 ```
@@ -74,8 +74,12 @@ pip install -e ".[dev]"
 export PLM_PASSWORD="your-password"
 export PLM_SESSION_SECRET="a-long-random-string"
 
-# Run MCP server (stdio transport — used by Claude Code)
+# Run MCP server — stdio transport (local, no auth)
 plm-mcp
+
+# Run MCP server — Streamable HTTP transport (remote; OAuth via WorkOS AuthKit
+# when WORKOS_AUTHKIT_DOMAIN + PLM_MCP_BASE_URL are set — see docs/pi-deployment.md § 6)
+plm-mcp-http
 
 # Run web UI (default port 2026)
 plm-web
@@ -94,9 +98,15 @@ pytest -v
 - **Storage**: one JSON file per project, one per week. Atomic writes via `.tmp` +
   `os.replace()` to avoid corruption.
 - **Models**: Pydantic v2 throughout — free JSON serialisation + validation.
-- **MCP**: FastMCP (`mcp.server.fastmcp.FastMCP`) — decorator-based, minimal boilerplate.
+- **MCP**: standalone `fastmcp` package (`fastmcp.FastMCP`) — decorator-based, minimal
+  boilerplate. One `mcp` instance serves both transports; auth (`AuthKitProvider`) is only
+  constructed when the WorkOS env vars are set. Pinned to 3.1.1: 3.2.x validates the
+  token audience (RFC 8707), which needs WorkOS Resource Indicators enabled first.
   Module-level `store` singleton; tests swap it via `srv.store = JsonStore(tmp_dir)`.
+- **Deployment**: `plm` (web) and `plm-mcp` (HTTP MCP, Compose profile `mcp`) run as two
+  Docker containers on the Pi, sharing the bind-mounted data dir, behind Caddy.
 - **Web**: server-rendered Jinja2, no JS framework — keeps Pi deployment simple.
+  SortableJS is vendored in `web/static/` for board drag-and-drop (no CDN).
 - **Board invariant**: every `KanbanBoard` must have at least one WIP column.
   Enforced by a Pydantic `model_validator`.
 - **Inbox**: stored as a single `inbox.json` list (not per-project files) — notes are
@@ -104,12 +114,15 @@ pytest -v
 - **Datetimes**: always `datetime.now(timezone.utc)` — timezone-aware throughout.
 - **Live reload**: watchdog watches the data directory → asyncio Event → SSE broadcast
   → browser reloads (only if no input is focused, to avoid losing user input).
+  Each message carries a data version (newest mtime in the data dir); the browser
+  ignores it unless newer than the version its page was rendered with. This drops
+  late watchdog echoes of the user's own POSTs (watchdog can report a rename ~0.5 s late).
 
 ---
 
 ## Dependencies
 ```
-mcp>=1.0.0
+fastmcp==3.1.1
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 jinja2>=3.1.0
@@ -173,8 +186,7 @@ If a user mentions they haven't set up their projects or profile yet, point them
 
 See `memory/MEMORY.md` for the full list. Highlights:
 
-- Mobile responsiveness audit (nav, Kanban scroll, touch drag-and-drop)
-- SSE spurious reloads — debounce on client or deduplicate on server
+- Mobile responsiveness audit (nav, Kanban scroll)
 - Overlapping time-block prevention
 - Multi-select time blocks (batch delete/move)
 - Extract `_require_plan` / `_require_block` helpers in `app.py` (mirrors MCP pattern)

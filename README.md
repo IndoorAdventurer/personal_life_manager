@@ -13,7 +13,7 @@ helps it coach you over time.
 > ([claude-sonnet-4-6](https://claude.ai)) through conversational sessions in
 > [Claude Code](https://claude.com/claude-code). The human author described what to
 > build, reviewed each chunk, and committed the result — but wrote essentially zero
-> code. Nine chunks, 326 tests, and a fully functional app — all through conversation.
+> code. Nine chunks, 347 tests, and a fully functional app — all through conversation.
 > See [Extending with Claude Code](#extending-the-project-with-claude-code) if you
 > want to continue in the same spirit.
 
@@ -50,10 +50,11 @@ A typical week looks like this:
    what helps you stay on track. It uses this in every planning session.
 
 **The setup that makes this work:**
-- `plm-web` runs on a Raspberry Pi — always-on, accessible from any device on the LAN
-- `plm-mcp` runs on the laptop where you use Claude Code
-- [Syncthing](https://syncthing.net) keeps the data directory in sync between laptop and Pi
-- Claude edits data through the MCP tools; the Pi browser reflects changes in real time via SSE
+- `plm-web` and the MCP server both run in Docker on a Raspberry Pi: always on, and
+  sharing one data directory
+- Caddy serves both over HTTPS; the MCP server uses OAuth 2.1 (via WorkOS AuthKit),
+  so Claude Code and Claude.ai, including the phone app, can connect from anywhere
+- Claude edits data through the MCP tools; open browsers reflect changes in real time via SSE
 
 You don't *need* this exact setup. The web UI is fully functional on its own — you can
 use it without Claude at all. The MCP server is what makes the Claude collaboration
@@ -65,12 +66,12 @@ seamless.
 
 | Area | What you get |
 |---|---|
-| **Kanban boards** | Per-project boards with configurable columns, WIP limits, drag-and-drop cards, and timestamped progress logs |
+| **Kanban boards** | Per-project boards with configurable columns, WIP limits, and timestamped progress logs. Drag cards to an exact position (to order by priority) and drag columns to rearrange them, on desktop and touch |
 | **Weekly planner** | Scrollable 24-hour calendar grid, color-coded by project, with a bar chart showing planned vs. target hours |
 | **Inbox** | Quick-capture notes that Claude can later triage, file, or act on |
 | **Behavioral profile** | Free-form Markdown document Claude maintains about your working style, preferences, and habits — with a full audit trail |
 | **Live sync** | The web UI auto-reloads whenever Claude (or anything else) changes a data file on disk |
-| **MCP tools** | 33 tools that let Claude read and update everything — projects, cards, time blocks, inbox, and profile — without leaving the conversation |
+| **MCP tools** | 34 tools that let Claude read and update everything — projects, cards, time blocks, inbox, and profile — without leaving the conversation |
 | **Resources** | A first-time setup prompt and reusable slash commands (e.g. `/weekly-review`) for structured planning sessions |
 
 ---
@@ -78,21 +79,24 @@ seamless.
 ## Architecture
 
 ```
-┌─────────────────────┐        ┌──────────────────────────────────────┐
-│   Claude (MCP)      │◄──────►│  plm-mcp  (FastMCP over stdio)       │
-│   Claude Code       │        │  33 tools for all data operations    │
+┌─────────────────────┐ HTTPS  ┌──────────────────────────────────────┐
+│   Claude Code /     │ OAuth  │  plm-mcp-http  (FastMCP, Streamable  │
+│   Claude.ai         │◄──────►│  HTTP, AuthKit)  — 34 tools          │
 └─────────────────────┘        └──────────┬───────────────────────────┘
                                            │ shared JSON files on disk
-┌─────────────────────┐        ┌──────────▼───────────────────────────┐
+┌─────────────────────┐ HTTPS  ┌──────────▼───────────────────────────┐
 │   Browser           │◄──────►│  plm-web  (FastAPI + Jinja2)         │
-│   (LAN / Pi)        │  HTML  │  Server-rendered UI, SSE live-reload │
+│   (any device)      │        │  Server-rendered UI, SSE live-reload │
 └─────────────────────┘        └──────────────────────────────────────┘
+        Both services: Docker containers on the Pi, behind Caddy
 ```
 
 Both processes read and write the same JSON files in `~/.local/share/plm/`.
 The web UI uses watchdog to detect file changes and push a reload event to the
-browser via Server-Sent Events.
+browser via Server-Sent Events. Each reload carries a data version, so browsers
+skip reloads for changes they already show.
 
+The same tools are also available over stdio (`plm-mcp`, no auth) for local use.
 `plm-web` provides the full feature set and works standalone — the MCP server is
 optional, but it's what makes Claude collaboration smooth.
 
@@ -109,9 +113,9 @@ optional, but it's what makes Claude collaboration smooth.
 src/plm/
 ├── models/       # Pydantic v2 data models
 ├── storage/      # JsonStore — generic atomic JSON file CRUD
-├── mcp_server/   # FastMCP server with 33 tools
+├── mcp_server/   # FastMCP server with 34 tools (stdio + HTTP entry points)
 └── web/          # FastAPI app + 7 Jinja2 templates
-tests/            # 326-test pytest suite
+tests/            # 347-test pytest suite
 pyproject.toml
 CLAUDE.md         # Instructions for Claude Code (read this if you want to extend the project with Claude)
 ```
@@ -158,10 +162,22 @@ plm-web
 # → http://localhost:2026  (or whatever PLM_PORT is set to)
 ```
 
-### Connect the MCP server to Claude Code
+### Connect the MCP server to Claude
 
-Run this once to register the MCP server at the user level (available in all
-your Claude Code sessions):
+**Remote (recommended):** run the MCP server on your server next to the web UI and
+connect Claude Code and Claude.ai to it over HTTPS with OAuth. This takes a free WorkOS
+AuthKit account and a domain; see
+[docs/pi-deployment.md § 6](docs/pi-deployment.md#6-remote-mcp-server-https--oauth).
+Once it's running:
+
+```bash
+claude mcp add --transport http plm-http https://your.domain.com/plm-mcp/mcp
+# then run /mcp inside Claude Code to log in
+```
+
+**Local (quickest to try):** run the stdio server on the same machine as the web UI.
+Run this once to register it at the user level (available in all your Claude Code
+sessions):
 
 ```bash
 claude mcp add plm --scope user -- plm-mcp
@@ -204,6 +220,12 @@ pytest -v
 | `PLM_DATA_DIR` | No | `~/.local/share/plm/` | Override data directory |
 | `PLM_PORT` | No | `2026` | Web UI listening port |
 | `PLM_ROOT_PATH` | No | `""` | Subpath prefix for reverse-proxy deployments (e.g. `/plm`) |
+| `WORKOS_AUTHKIT_DOMAIN` | Remote MCP only | — | AuthKit domain, e.g. `your-slug.authkit.app` |
+| `PLM_MCP_BASE_URL` | Remote MCP only | — | Public URL of the MCP server, e.g. `https://your.domain.com/plm-mcp` |
+| `PLM_MCP_PORT` | No | `2027` | Remote MCP server listening port |
+
+`plm-mcp-http` only enables OAuth when both `WORKOS_AUTHKIT_DOMAIN` and
+`PLM_MCP_BASE_URL` are set.
 
 ---
 
@@ -226,22 +248,22 @@ so a crash mid-write never corrupts existing data.
 
 ## Raspberry Pi deployment
 
-See **[docs/pi-deployment.md](docs/pi-deployment.md)** for a full guide to running
-`plm-web` as a persistent systemd service on a Raspberry Pi, including LAN access
-and an optional Caddy reverse proxy.
+See **[docs/pi-deployment.md](docs/pi-deployment.md)** for a full guide: a direct
+install as a systemd service or a Docker Compose deployment, Caddy for HTTPS, and
+the remote MCP server with OAuth.
 
 ---
 
 ## MCP tools reference
 
-The MCP server exposes 33 tools across five areas:
+The MCP server exposes 34 tools:
 
 | Area | Tools |
 |---|---|
 | **Projects** | `list_projects`, `create_project`, `get_project`, `update_project`, `archive_project` |
 | **Columns** | `list_columns`, `add_column`, `rename_column`, `remove_column` |
 | **Cards** | `list_cards`, `get_card`, `add_card`, `update_card`, `move_card`, `reorder_cards`, `append_card_log`, `delete_card` |
-| **Planning** | `get_plan`, `create_plan`, `add_time_block`, `remove_time_block`, `update_time_block`, `get_weekly_hours_summary`, `get_wip_overview` |
+| **Planning** | `get_plan`, `create_plan`, `add_time_block`, `add_time_blocks`, `remove_time_block`, `update_time_block`, `get_weekly_hours_summary`, `get_wip_overview` |
 | **Inbox** | `add_inbox_note`, `list_inbox_notes`, `mark_inbox_note_addressed`, `delete_inbox_note` |
 | **Profile** | `get_behavioral_profile`, `get_profile_history`, `update_behavioral_profile`, `patch_behavioral_profile` |
 | **Reviews** | `get_weekly_review_data` |

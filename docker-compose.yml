@@ -25,7 +25,7 @@ services:
       # Defaults to 2026 if PLM_PORT is not set in .env.
       - "${PLM_PORT:-2026}:${PLM_PORT:-2026}"
     volumes:
-      # Data lives on the host so Syncthing keeps working and data survives rebuilds.
+      # Data lives on the host so it survives rebuilds (and is shared with plm-mcp).
       - ${HOME}/.local/share/plm:/data
     environment:
       # Tell the app where the bind-mounted data directory is.

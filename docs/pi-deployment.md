@@ -3,9 +3,10 @@
 This guide walks through running `plm-web` as a persistent service on a Raspberry Pi
 so it is available on your LAN (or from anywhere via a reverse proxy).
 
-The MCP server (`plm-mcp`) runs on whatever machine you use Claude Code on — it does
-not need to run on the Pi. Both processes share the same JSON data directory; if you
-want the MCP server and web UI on the same machine, that works too — just run both.
+The recommended setup also runs the MCP server on the Pi, over HTTPS with OAuth, so
+Claude Code and Claude.ai can reach it from any device. Both processes share the same
+JSON data directory. See [section 6](#6-remote-mcp-server-https--oauth), which builds
+on the Docker deployment.
 
 ---
 
@@ -271,7 +272,7 @@ then starts the container in the background with `--restart unless-stopped` so i
 auto-starts at boot and restarts on crash.
 
 The data directory (`~/.local/share/plm/`) is bind-mounted into the container, so
-data lives on the host — Syncthing keeps working and data survives image rebuilds.
+data lives on the host and survives image rebuilds.
 
 ### Useful commands
 
@@ -294,7 +295,8 @@ After every `git pull`, one command rebuilds and restarts:
 ```bash
 cd ~/personal_life_manager
 git pull
-docker compose up -d --build
+docker compose up -d --build                  # web UI only
+docker compose --profile mcp up -d --build    # web UI + remote MCP server
 ```
 
 ### Caddy with Docker
@@ -305,27 +307,105 @@ whether the app runs in Docker or not.
 
 ---
 
-## 6. Connecting the MCP server (on a different machine)
+## 6. Remote MCP server (HTTPS + OAuth)
 
-If you run Claude Code on your laptop and `plm-web` on the Pi, the recommended setup
-is to sync the data directory between the two machines:
+The recommended setup runs the MCP server on the Pi too, next to `plm-web`, as a
+second Docker container sharing the same data directory. Claude Code (on any machine)
+and Claude.ai (web and mobile) then connect to it over HTTPS. Data never leaves the
+Pi and nothing needs syncing.
 
-### Option A — Sync data with Syncthing (recommended)
+Remote MCP servers must use OAuth 2.1 with Dynamic Client Registration, so Claude can
+register itself. Rather than implementing that ourselves, `plm-mcp-http` delegates it
+to [WorkOS AuthKit](https://workos.com/docs/authkit) through fastmcp's
+`AuthKitProvider`. AuthKit is free for personal use.
 
-Run [Syncthing](https://syncthing.net) on both machines and sync
-`~/.local/share/plm/`. Both `plm-mcp` (laptop) and `plm-web` (Pi) then read and
-write the same logical data store. Changes Claude makes on the laptop appear in the
-browser on the Pi within seconds.
+This section assumes the [Docker deployment](#docker-deployment) and a Caddy setup
+with a real domain (HTTPS is required).
 
-### Option B — MCP server also on the Pi (data lives on Pi)
+### 6.1 WorkOS / AuthKit setup (one-time)
 
-Install `plm-mcp` on the Pi and point Claude Code at it via SSH transport or a
-remote development session. Data never leaves the Pi.
+1. Create a WorkOS account.
+2. In the WorkOS dashboard, enable **Dynamic Client Registration** and **Client ID
+   Metadata Document (CIMD)** for AuthKit.
+3. Add Claude.ai's callback as a redirect URI:
+   `https://claude.ai/api/mcp/auth_callback`
+4. Note your **AuthKit domain**, e.g. `your-slug.authkit.app`.
 
-### Option C — Everything on the laptop
+### 6.2 Environment variables
 
-Run both `plm-mcp` and `plm-web` on your laptop. Skip the Pi entirely. Useful for
-trying things out before committing to a Pi deployment.
+Add these to `.env` next to the web UI's variables:
+
+```
+WORKOS_AUTHKIT_DOMAIN=your-slug.authkit.app
+# Public URL of the MCP server — must match the Caddy path in 6.4
+PLM_MCP_BASE_URL=https://your.domain.com/plm-mcp
+# Optional (default 2027)
+# PLM_MCP_PORT=2027
+```
+
+Auth is only enabled when **both** `WORKOS_AUTHKIT_DOMAIN` and `PLM_MCP_BASE_URL` are
+set. Without them the HTTP server would run unauthenticated, so double-check them.
+
+### 6.3 Start the MCP container
+
+The `plm-mcp` service sits behind the Compose profile `mcp`, so it only starts when
+asked for:
+
+```bash
+docker compose --profile mcp up -d --build
+```
+
+This runs `plm-mcp-http` (Streamable HTTP transport) on port 2027, with the same
+`~/.local/share/plm` bind mount as the web container. The web UI's live reload picks
+up changes Claude makes right away.
+
+### 6.4 Caddy
+
+Two blocks are needed next to the `/plm/*` one:
+
+```
+your.domain.com {
+    # ... /plm/* block from section 5 ...
+
+    # The MCP server itself — handle_path strips the /plm-mcp prefix
+    handle_path /plm-mcp/* {
+        reverse_proxy localhost:2027
+    }
+    redir /plm-mcp /plm-mcp/ permanent
+
+    # OAuth discovery. Because the server lives at a subpath, the Protected
+    # Resource Metadata URL (RFC 9728) sits at the domain *root*:
+    #   /.well-known/oauth-protected-resource/plm-mcp/mcp
+    # which the block above doesn't match. Use handle (NOT handle_path) so the
+    # full path reaches the server.
+    handle /.well-known/oauth-protected-resource/* {
+        reverse_proxy localhost:2027
+    }
+}
+```
+
+Then `sudo systemctl reload caddy`.
+
+### 6.5 Connect Claude
+
+The MCP endpoint is `https://your.domain.com/plm-mcp/mcp`. The `/mcp` suffix is
+required.
+
+- **Claude.ai:** Settings → Connectors → add a custom connector with that URL. Leave
+  the OAuth client ID and secret blank, because Dynamic Client Registration handles
+  it. Claude opens the AuthKit login, and afterwards the tools become available.
+- **Claude Code:**
+  ```bash
+  claude mcp add --transport http plm-http https://your.domain.com/plm-mcp/mcp
+  ```
+  Then run `/mcp` inside Claude Code to complete the OAuth login.
+
+### Alternative: everything local (no OAuth)
+
+For trying things out, run both `plm-web` and the stdio server on one machine and
+register it with `claude mcp add plm --scope user -- plm-mcp`. The stdio transport
+never uses auth. It only sees that machine's data directory, though, so don't mix it
+with a Pi deployment.
 
 ---
 
@@ -354,4 +434,5 @@ systemctl --user restart plm-web
 | Caddy subpath returns 404 | Make sure you used `handle_path`, not `handle` — see section 5 |
 | Browser warns "insecure connection" on forms | Set `PLM_ROOT_PATH` correctly and ensure Caddy forwards `X-Forwarded-Proto` (it does by default) |
 | SSE live reload not working | Caddy proxies SSE correctly by default; if using another proxy, ensure response buffering is disabled |
-| Page auto-reloads repeatedly | Known issue — see post-MVP polish items in CLAUDE.md. Workaround: ignore or add a debounce |
+| Claude can't complete the OAuth flow / discovery 404s | Check the `/.well-known/oauth-protected-resource/*` Caddy block (section 6.4) and that `PLM_MCP_BASE_URL` matches the public path |
+| Tokens rejected after upgrading fastmcp | fastmcp is pinned to 3.1.1 on purpose: 3.2.x validates the token audience (RFC 8707), which needs WorkOS Resource Indicators enabled first |
