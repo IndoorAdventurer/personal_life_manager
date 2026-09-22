@@ -213,6 +213,24 @@
 
 {% block scripts %}{% endblock %}
 
+<!-- DEBUG-RELOAD: on-screen event log that survives reloads -->
+<div id="dbg-log" style="position:fixed;left:4px;bottom:4px;z-index:9999;max-width:95vw;background:rgba(15,23,42,.85);color:#e2e8f0;font:11px/1.3 monospace;padding:4px 6px;border-radius:4px;white-space:pre;pointer-events:none"></div>
+<script>
+window.dbg = function (msg) {
+  var t = new Date().toISOString().slice(11, 23);
+  var log = [];
+  try { log = JSON.parse(sessionStorage.getItem('plm-dbg') || '[]'); } catch (e) {}
+  log.push(t + ' ' + location.pathname.split('/').pop() + ' ' + msg);
+  log = log.slice(-12);
+  try { sessionStorage.setItem('plm-dbg', JSON.stringify(log)); } catch (e) {}
+  console.log('[dbg]', t, msg);
+  var el = document.getElementById('dbg-log');
+  if (el) el.textContent = log.join('\n');
+};
+var _nav = performance.getEntriesByType('navigation')[0];
+dbg('LOAD type=' + (_nav ? _nav.type : '?'));
+window.addEventListener('beforeunload', function () { dbg('beforeunload'); });
+</script>
 <script>
 /* SSE live-refresh — reconnects to GET /events and reloads the page (or shows
    the banner) whenever the server sends a 'reload' message.
@@ -226,6 +244,7 @@
 
   function connect() {
     var es = new EventSource('{{ request.url_for("sse_events") }}');
+    es.onopen = function () { dbg('sse open'); };  // DEBUG-RELOAD
 
     // Close the SSE connection as soon as the page starts unloading (navigation
     // or refresh).  Without this the browser may deliver a stale 'reload' event
@@ -236,6 +255,7 @@
 
     es.onmessage = function (e) {
       if (e.data !== 'reload') return;
+      dbg('sse reload msg, focused=' + (document.activeElement && document.activeElement.tagName));  // DEBUG-RELOAD
 
       // Check whether the user is actively typing in a form field
       var active = document.activeElement;
@@ -254,6 +274,7 @@
     };
 
     es.onerror = function () {
+      dbg('sse error -> retry in 5s');  // DEBUG-RELOAD
       // Close this connection; browser will not auto-reconnect after onerror
       // on a closed source.  Retry after 5 s so a server restart eventually
       // reconnects without flooding the server with rapid reconnect loops.

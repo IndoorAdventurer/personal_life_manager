@@ -199,6 +199,8 @@ class _StoreWatcher(FileSystemEventHandler):
     """
 
     def on_any_event(self, event: FileSystemEvent) -> None:
+        import datetime as _dt  # DEBUG-RELOAD
+        if event.event_type not in ("opened", "closed_no_write"): print(f"[{_dt.datetime.now():%H:%M:%S.%f}] WATCHDOG {event.event_type} {event.src_path} -> {getattr(event, 'dest_path', '')}", flush=True)  # DEBUG-RELOAD
         # Ignore directory events — we care about file content changes only.
         if event.is_directory:
             return
@@ -217,6 +219,7 @@ class _StoreWatcher(FileSystemEventHandler):
         if not path.endswith(".json"):
             return
         if _loop is not None:
+            print(f"    -> notify {len(_waiting)} SSE client(s)", flush=True)  # DEBUG-RELOAD
             _loop.call_soon_threadsafe(_notify_all)
 
 
@@ -1314,7 +1317,10 @@ async def sse_events(
     that would otherwise close idle connections.
     """
     async def event_stream():
-        ev = asyncio.Event()
+        import datetime as _dt  # DEBUG-RELOAD
+        _cid = id(ev := asyncio.Event()) % 10000  # DEBUG-RELOAD
+        _ref = request.headers.get("referer", "?")  # DEBUG-RELOAD
+        print(f"[{_dt.datetime.now():%H:%M:%S.%f}] SSE connect #{_cid} from {_ref}", flush=True)  # DEBUG-RELOAD
         _waiting.append(ev)
         try:
             while True:
@@ -1324,6 +1330,7 @@ async def sse_events(
                 try:
                     await asyncio.wait_for(ev.wait(), timeout=30.0)
                     ev.clear()
+                    print(f"[{_dt.datetime.now():%H:%M:%S.%f}] SSE send reload -> #{_cid} ({_ref})", flush=True)  # DEBUG-RELOAD
                     yield "data: reload\n\n"
                 except asyncio.TimeoutError:
                     # SSE comment — keeps the TCP connection alive; browsers ignore it
@@ -1331,6 +1338,7 @@ async def sse_events(
         finally:
             # Always deregister so the list doesn't grow with stale events
             _waiting.remove(ev)
+            print(f"[{_dt.datetime.now():%H:%M:%S.%f}] SSE close #{_cid}", flush=True)  # DEBUG-RELOAD
 
     return StreamingResponse(
         event_stream(),
