@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 import markdown as _md
 import uvicorn
@@ -119,6 +120,27 @@ def _week_label(week: str) -> str:
         return f"{monday.strftime('%b %-d')} – {sunday.strftime('%b %-d, %Y')}"
     else:
         return f"{monday.strftime('%b %-d, %Y')} – {sunday.strftime('%b %-d, %Y')}"
+
+
+def _ical_links(request: Request) -> dict[str, str] | None:
+    """Subscription links for the planning-page footer, or None if the feed is off.
+
+    Mirrors the usual "Copy link / Subscribe" pair on university timetables:
+      url    — plain https URL, for copying into any calendar app
+      webcal — same URL with the webcal:// scheme, which the OS hands to its
+               default calendar app (Apple Calendar, Outlook) as a subscription
+      google — Google's "add calendar by URL" page, pre-filled via ?cid=
+    Showing the token here is fine: the planning page itself requires login.
+    """
+    if not _PLM_ICAL_TOKEN:
+        return None
+    url = str(request.url_for("calendar_feed").include_query_params(token=_PLM_ICAL_TOKEN))
+    webcal = re.sub(r"^https?://", "webcal://", url)
+    return {
+        "url": url,
+        "webcal": webcal,
+        "google": "https://calendar.google.com/calendar/render?cid=" + quote(webcal, safe=""),
+    }
 
 
 # ── 3c. Calendar grid helpers ────────────────────────────────────────────────
@@ -970,6 +992,7 @@ async def planning_page(
         "active_projects": active_projects,
         "project_map": project_map,
         "project_colors": project_colors,
+        "ical": _ical_links(request),
         "days": _DAYS,
         # Calendar grid
         "day_headers": day_headers,

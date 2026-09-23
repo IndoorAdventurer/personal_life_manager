@@ -527,6 +527,31 @@ main { max-width: 1400px; }
 }
 .notes-section h2 { margin-top: 0; }
 .notes-section textarea { width: 100%; }
+
+/* ── Calendar feed footer ─────────────────────────────────────────────── */
+.feed-footer {
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  text-align: center;
+}
+.feed-footer a,
+.feed-footer button {
+  color: #64748b;
+  font: inherit;
+  text-decoration: none;
+}
+/* Copy is a <button> (it acts, doesn't navigate) styled to match the links */
+.feed-footer button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.feed-footer a:hover,
+.feed-footer button:hover { color: #3b82f6; text-decoration: underline; }
 {% endblock %}
 
 {% block content %}
@@ -807,6 +832,18 @@ main { max-width: 1400px; }
     <button type="submit" class="btn btn-primary mt-2">Save notes</button>
   </form>
 </div>
+
+{# ── Calendar feed links (only when PLM_ICAL_TOKEN is set) ────────────────── #}
+{% if ical %}
+<footer class="feed-footer">
+  Calendar feed:
+  <button type="button" id="feed-copy" data-url="{{ ical.url }}">Copy link</button>
+  ·
+  <a href="{{ ical.google }}" target="_blank" rel="noopener">Google Calendar</a>
+  ·
+  <a href="{{ ical.webcal }}">Apple / Outlook</a>
+</footer>
+{% endif %}
 
 {% endblock %}
 
@@ -1645,6 +1682,24 @@ main { max-width: 1400px; }
     const anchorPx = isCurrentWeek ? Math.round(nowMinutes * HOUR_PX / 60) : {{ hour_px * 12 }};
     calScroll.scrollTop = anchorPx - 300;
   }
+})();
+
+// ── Calendar feed: copy link ──────────────────────────────────────────────
+// The Clipboard API needs a secure context (HTTPS or localhost); if it's
+// unavailable or refused, fall back to a prompt with the URL pre-selected.
+(function () {
+  const btn = document.getElementById('feed-copy');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const url = btn.dataset.url;
+    try {
+      await navigator.clipboard.writeText(url);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy link'; }, 2000);
+    } catch {
+      window.prompt('Copy the calendar feed URL:', url);
+    }
+  });
 })();
 </script>
 {% endblock %}

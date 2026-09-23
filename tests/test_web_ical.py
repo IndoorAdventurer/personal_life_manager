@@ -82,3 +82,27 @@ class TestRange:
         resp = client.get(f"/calendar.ics?token={_TOKEN}")
         [event] = Calendar.from_ical(resp.content).walk("VEVENT")
         assert str(event["summary"]) == "Old hobby"
+
+
+class TestPlanningFooter:
+    @pytest.fixture
+    def authed(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setattr(app_module, "_PLM_PASSWORD", "pw")
+        client.post("/login", data={"password": "pw"})
+        return client
+
+    def test_links_shown_when_token_set(self, authed: TestClient) -> None:
+        html = authed.get("/planning").text
+        assert f'data-url="http://testserver/calendar.ics?token={_TOKEN}"' in html
+        assert f'href="webcal://testserver/calendar.ics?token={_TOKEN}"' in html
+        # Google's ?cid= carries the webcal URL, fully percent-encoded
+        assert (
+            "calendar.google.com/calendar/render?cid="
+            f"webcal%3A%2F%2Ftestserver%2Fcalendar.ics%3Ftoken%3D{_TOKEN}"
+        ) in html
+
+    def test_footer_hidden_when_token_unset(
+        self, authed: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(app_module, "_PLM_ICAL_TOKEN", "")
+        assert "feed-footer\"" not in authed.get("/planning").text
