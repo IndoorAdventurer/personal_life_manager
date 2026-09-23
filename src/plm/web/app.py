@@ -1247,6 +1247,111 @@ async def duplicate_block(
     return RedirectResponse(url=week_url, status_code=303)
 
 
+# Latest minute a block may end at — the calendar never submits "24:00"
+# (see toTime() in planning.html), so a batch move must not produce it either.
+_LAST_MINUTE = 23 * 60 + 59
+
+
+@app.post("/planning/blocks/batch", name="batch_blocks")
+async def batch_blocks(
+    request: Request,
+    week: str = Form(""),
+    action: str = Form(""),
+    block_ids: list[str] = Form([]),
+    # Only used by action=move: the same shift is applied to every block so the
+    # group keeps its internal spacing.  Offsets (not absolute positions) mean
+    # the client cannot accidentally send inconsistent per-block targets.
+    day_offset: int = Form(0),
+    minute_offset: int = Form(0),
+    _: None = Depends(require_auth),
+) -> Response:
+    """Apply one action to several time blocks at once: delete, duplicate, move.
+
+    Called with fetch() by the multi-select UI rather than a form submit, so it
+    answers with JSON instead of a redirect:
+      - success → {"ok": true, "selected": [ids]} — the blocks the page should
+        show as selected after reloading (copies after duplicate, the moved
+        blocks after move, nothing after delete);
+      - failure → 400 {"ok": false, "error": msg}, with the same message also
+        flashed so it shows after the client's reload like any other error.
+
+    All-or-nothing: every id must exist and a move must keep every block inside
+    the week and the day, otherwise nothing is saved.  One save per batch means
+    one file write and therefore one live-reload event.
+    """
+    def fail(message: str) -> JSONResponse:
+        _flash(request, message, "error")
+        return JSONResponse({"ok": False, "error": message}, status_code=400)
+
+    if not _validate_week(week):
+        return fail("Invalid week.")
+    if action not in ("delete", "duplicate", "move"): # TODO: copy to next week stuff later maybe
+        return fail("Unknown batch action.")
+
+    # dict.fromkeys dedupes while keeping the client's order
+    ids = list(dict.fromkeys(block_ids))
+    if not ids:
+        return fail("No time blocks selected.")
+
+    plan = store.get_plan(week)
+    if plan is None:
+        return fail("No plan found for this week.")
+
+    by_id = {b.id: b for b in plan.time_blocks}
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        # Most likely a stale page (block removed elsewhere, e.g. via MCP)
+        return fail(f"{len(missing)} selected time block(s) no longer exist.")
+    selected_blocks = [by_id[i] for i in ids]
+
+    def to_min(t: str) -> int:
+        h, m = map(int, t.split(":"))
+        return h * 60 + m
+
+    def to_time(total: int) -> str:
+        return f"{total // 60:02d}:{total % 60:02d}"
+
+    if action == "delete":
+        doomed = set(ids)
+        plan.time_blocks = [b for b in plan.time_blocks if b.id not in doomed]
+        selected: list[str] = []
+
+    elif action == "duplicate":
+        # Same semantics as duplicate_block: copies land on the originals' slots
+        copies = [
+            TimeBlock(
+                project_id=b.project_id,
+                day=b.day,
+                start_time=b.start_time,
+                end_time=b.end_time,
+                notes=b.notes,
+            )
+            for b in selected_blocks
+        ]
+        plan.time_blocks.extend(copies)
+        selected = [c.id for c in copies]
+
+    else:  # move
+        # Validate every block's target before touching any of them
+        targets = []
+        for b in selected_blocks:
+            day_idx = _DAYS.index(b.day) + day_offset
+            start = to_min(b.start_time) + minute_offset
+            end = to_min(b.end_time) + minute_offset
+            if not 0 <= day_idx < len(_DAYS) or start < 0 or end > _LAST_MINUTE:
+                return fail("Move would take blocks outside the week or past midnight.")
+            targets.append((b, _DAYS[day_idx], start, end))
+        for b, day, start, end in targets:
+            b.day = cast("Day", day)
+            b.start_time = to_time(start)
+            b.end_time = to_time(end)
+        selected = ids
+
+    plan.updated_at = datetime.now(timezone.utc)
+    store.save_plan(plan)
+    return JSONResponse({"ok": True, "selected": selected})
+
+
 @app.post("/planning/notes", name="save_plan_notes")
 async def save_plan_notes(
     request: Request,

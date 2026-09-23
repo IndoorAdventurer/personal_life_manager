@@ -730,3 +730,125 @@ class TestOverlapRendering:
         ]
         store.save_plan(plan)
         assert 'class="cal-overlap"' not in client.get(f"/planning?week={_WEEK}").text
+
+
+# ---------------------------------------------------------------------------
+# POST /planning/blocks/batch
+# ---------------------------------------------------------------------------
+
+class TestBatchBlocks:
+    def _setup(self, store: JsonStore, *spans: tuple[str, str, str]) -> list[TimeBlock]:
+        """Save a plan with one block per (day, start, end) and return the blocks."""
+        p = _make_project(store)
+        plan = _make_plan(store)
+        blocks = [_make_block(p.id, day=d, start=s, end=e) for d, s, e in spans]
+        plan.time_blocks += blocks
+        store.save_plan(plan)
+        return blocks
+
+    def _post(self, client: TestClient, action: str, ids: list[str], **extra):
+        data = {"week": _WEEK, "action": action, "block_ids": ids, **extra}
+        return client.post("/planning/blocks/batch", data=data)
+
+    # ── delete ──
+
+    def test_delete_removes_only_selected(self, client: TestClient, store: JsonStore) -> None:
+        a, b, c = self._setup(store, ("monday", "09:00", "10:00"),
+                              ("tuesday", "09:00", "10:00"), ("friday", "09:00", "10:00"))
+        resp = self._post(client, "delete", [a.id, c.id])
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "selected": []}
+        assert [x.id for x in store.get_plan(_WEEK).time_blocks] == [b.id]
+
+    # ── duplicate ──
+
+    def test_duplicate_copies_and_selects_copies(self, client: TestClient, store: JsonStore) -> None:
+        a, b = self._setup(store, ("monday", "09:00", "10:00"), ("tuesday", "13:00", "14:30"))
+        resp = self._post(client, "duplicate", [a.id, b.id])
+        selected = resp.json()["selected"]
+        blocks = {x.id: x for x in store.get_plan(_WEEK).time_blocks}
+        assert len(blocks) == 4
+        assert len(selected) == 2 and a.id not in selected and b.id not in selected
+        # Copies sit on the originals' slots, in selection order
+        assert (blocks[selected[0]].day, blocks[selected[0]].start_time) == ("monday", "09:00")
+        assert (blocks[selected[1]].day, blocks[selected[1]].end_time) == ("tuesday", "14:30")
+
+    # ── move ──
+
+    def test_move_shifts_group_by_offsets(self, client: TestClient, store: JsonStore) -> None:
+        a, b = self._setup(store, ("monday", "09:00", "10:00"), ("tuesday", "13:00", "14:30"))
+        resp = self._post(client, "move", [a.id, b.id], day_offset=2, minute_offset=-30)
+        assert resp.json() == {"ok": True, "selected": [a.id, b.id]}
+        blocks = {x.id: x for x in store.get_plan(_WEEK).time_blocks}
+        assert (blocks[a.id].day, blocks[a.id].start_time, blocks[a.id].end_time) == \
+            ("wednesday", "08:30", "09:30")
+        assert (blocks[b.id].day, blocks[b.id].start_time, blocks[b.id].end_time) == \
+            ("thursday", "12:30", "14:00")
+
+    def test_move_up_to_last_minute_allowed(self, client: TestClient, store: JsonStore) -> None:
+        (a,) = self._setup(store, ("monday", "22:00", "23:00"))
+        resp = self._post(client, "move", [a.id], minute_offset=59)
+        assert resp.status_code == 200
+        assert store.get_plan(_WEEK).time_blocks[0].end_time == "23:59"
+
+    @pytest.mark.parametrize("day_offset,minute_offset", [
+        (-1, 0),   # monday block → before the week
+        (6, 0),    # tuesday block → past sunday
+        (0, 60),   # 23:30 end → past midnight
+        (0, -600), # 09:00 start → before 00:00
+    ])
+    def test_move_out_of_bounds_changes_nothing(
+        self, client: TestClient, store: JsonStore, day_offset: int, minute_offset: int,
+    ) -> None:
+        a, b = self._setup(store, ("monday", "09:00", "10:00"), ("tuesday", "22:30", "23:30"))
+        resp = self._post(client, "move", [a.id, b.id],
+                          day_offset=day_offset, minute_offset=minute_offset)
+        assert resp.status_code == 400
+        assert resp.json()["ok"] is False
+        # All-or-nothing: neither block moved, even though one of them could have
+        blocks = {x.id: x for x in store.get_plan(_WEEK).time_blocks}
+        assert (blocks[a.id].day, blocks[a.id].start_time) == ("monday", "09:00")
+        assert (blocks[b.id].day, blocks[b.id].start_time) == ("tuesday", "22:30")
+
+    # ── validation ──
+
+    def test_unknown_id_changes_nothing(self, client: TestClient, store: JsonStore) -> None:
+        (a,) = self._setup(store, ("monday", "09:00", "10:00"))
+        before = store.get_plan(_WEEK).updated_at
+        resp = self._post(client, "delete", [a.id, "no-such-id"])
+        assert resp.status_code == 400
+        assert "no longer exist" in resp.json()["error"]
+        plan = store.get_plan(_WEEK)
+        assert len(plan.time_blocks) == 1 and plan.updated_at == before
+
+    def test_error_is_flashed(self, client: TestClient, store: JsonStore) -> None:
+        """The client reloads after a failure, so the message must show as a flash."""
+        self._setup(store, ("monday", "09:00", "10:00"))
+        self._post(client, "delete", ["no-such-id"])
+        assert "no longer exist" in client.get(f"/planning?week={_WEEK}").text
+
+    @pytest.mark.parametrize("data,error", [
+        ({"week": "bad", "action": "delete", "block_ids": ["x"]}, "Invalid week"),
+        ({"week": _WEEK, "action": "explode", "block_ids": ["x"]}, "Unknown batch action"),
+        ({"week": _WEEK, "action": "delete"}, "No time blocks selected"),
+        ({"week": _NEXT_WEEK, "action": "delete", "block_ids": ["x"]}, "No plan found"),
+    ])
+    def test_bad_requests(self, client: TestClient, store: JsonStore, data: dict, error: str) -> None:
+        self._setup(store, ("monday", "09:00", "10:00"))
+        resp = client.post("/planning/blocks/batch", data=data)
+        assert resp.status_code == 400
+        assert error in resp.json()["error"]
+
+    def test_duplicate_ids_are_deduped(self, client: TestClient, store: JsonStore) -> None:
+        (a,) = self._setup(store, ("monday", "09:00", "10:00"))
+        resp = self._post(client, "duplicate", [a.id, a.id])
+        assert len(resp.json()["selected"]) == 1
+        assert len(store.get_plan(_WEEK).time_blocks) == 2
+
+    def test_requires_auth(self, store: JsonStore, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(app_module, "store", store)
+        with TestClient(app_module.app) as anon:
+            resp = anon.post("/planning/blocks/batch",
+                             data={"week": _WEEK, "action": "delete", "block_ids": ["x"]},
+                             follow_redirects=False)
+        assert resp.status_code in (302, 303)
