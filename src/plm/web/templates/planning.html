@@ -172,6 +172,60 @@ main { max-width: 1400px; }
   -webkit-touch-callout: none;  /* iOS: suppress copy/share callout on long-press */
 }
 /*
+ * Selected block (multi-select): a white + dark double ring reads on every
+ * project colour, and a ✓ badge in the top-right corner.  ::before is free —
+ * ::after is taken by the resize handle.
+ */
+.cal-block.selected {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #0f172a;
+}
+.cal-block.selected::before {
+  content: '✓';
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0f172a;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+
+/*
+ * Selection bar: floats at the bottom of the viewport rather than sitting
+ * above the grid, so showing it never shifts the calendar under the user's
+ * finger mid-selection (and it stays in thumb reach on mobile).
+ */
+.sel-bar {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem 0.45rem 0.9rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.sel-bar[hidden] { display: none; }
+.sel-bar .btn:disabled { opacity: 0.4; cursor: default; }
+.sel-bar .sel-clear { color: #94a3b8; border-color: #334155; }
+
+/* "Select" toggle in the palette row — highlighted while select mode is on */
+#select-toggle { margin-left: auto; }
+#select-toggle.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+
+/*
  * Overlap band: hatched red stripes over the minutes where two or more blocks
  * clash.  Sits above the blocks (z-index 2) but ignores the pointer, so taps,
  * drags and resizes still reach the block underneath.
@@ -506,6 +560,9 @@ main { max-width: 1400px; }
   <span class="palette-label palette-hint" style="margin-left:0.5rem; font-weight:400; color:#94a3b8;">
     — click or drag on the grid to add a block; drag blocks to move them
   </span>
+  {# Select mode: taps toggle block selection (the mobile path — desktop can
+     also Ctrl/Shift-click without it) #}
+  <button type="button" class="btn btn-ghost btn-sm" id="select-toggle">Select</button>
   {% else %}
   <span class="palette-label">
     No active projects —
@@ -526,6 +583,7 @@ main { max-width: 1400px; }
      data-del-url-tpl="{{ request.url_for('delete_block', block_id='BLOCK_ID') }}"
      data-dup-url-tpl="{{ request.url_for('duplicate_block', block_id='BLOCK_ID') }}"
      data-update-url-tpl="{{ request.url_for('update_block', block_id='BLOCK_ID') }}"
+     data-batch-url="{{ request.url_for('batch_blocks') }}"
      data-board-url-tpl="{{ request.url_for('project_detail', project_id='PROJ_ID') }}"
      data-week="{{ week }}">
 
@@ -603,6 +661,18 @@ main { max-width: 1400px; }
   </div>{# /cal-scroll #}
 
 </div>{# /cal-outer #}
+
+{# ── Selection bar (multi-select) ───────────────────────────────────────────── #}
+{# Shown while blocks are selected or select mode is on; JS toggles [hidden]. #}
+<div class="sel-bar" id="sel-bar" hidden>
+  <span id="sel-count"></span>
+  <button type="button" class="btn btn-secondary btn-sm" id="sel-duplicate"
+          title="Duplicate (Ctrl+D)">Duplicate</button>
+  <button type="button" class="btn btn-danger btn-sm" id="sel-delete"
+          title="Delete (Del)">Delete</button>
+  <button type="button" class="btn btn-ghost btn-sm sel-clear" id="sel-clear"
+          title="Clear selection (Esc)">✕</button>
+</div>
 
 {# ── Block action popup ─────────────────────────────────────────────────────── #}
 {#
@@ -816,6 +886,10 @@ main { max-width: 1400px; }
     sessionStorage.setItem('plm-page-scroll', window.scrollY);
     sessionStorage.setItem('plm-grid-scroll', calScroll.scrollTop);
     if (selectedPid) sessionStorage.setItem('plm-selected-pid', selectedPid);
+    // Multi-select survives reloads too — both our own batch reloads (which
+    // put the copies / moved blocks in `selection` first) and SSE live reloads.
+    sessionStorage.setItem('plm-selected-blocks', JSON.stringify([...selection]));
+    sessionStorage.setItem('plm-select-mode', selectMode ? '1' : '');
   }
   window.addEventListener('pagehide', saveViewState);
 
@@ -872,6 +946,113 @@ main { max-width: 1400px; }
     selectChip(restoredChip ? _savedPid : chips[0].dataset.pid);
   }
 
+  // ── Multi-select ───────────────────────────────────────────────────────────
+  /*
+   * File-manager semantics: a plain click selects just that block (and opens
+   * its popup); Ctrl/Cmd/Shift-click toggles a block.  Mobile (and desktop too):
+   * the "Select" button turns on select mode, where a plain tap toggles.
+   * While anything is selected (or select mode is on), a click on empty grid
+   * only clears the selection instead of drawing a new block.
+   * Actions go through the batch route with fetch(); the response names the
+   * blocks to keep selected, and the page reloads to show the result.
+   */
+  const BATCH_URL    = calOuter.dataset.batchUrl;
+  const selection    = new Set();   // selected block ids
+  let   selectMode   = false;
+  const selBar       = document.getElementById('sel-bar');
+  const selCount     = document.getElementById('sel-count');
+  const selDup       = document.getElementById('sel-duplicate');
+  const selDel       = document.getElementById('sel-delete');
+  const selectToggle = document.getElementById('select-toggle');
+
+  function renderSelection() {
+    calOuter.querySelectorAll('.cal-block').forEach(el =>
+      el.classList.toggle('selected', selection.has(el.dataset.blockId)));
+    const n = selection.size;
+    selBar.hidden = !(n || selectMode);
+    selCount.textContent = n ? `${n} selected` : 'Tap blocks to select';
+    selDup.disabled = selDel.disabled = !n;
+    selectToggle?.classList.toggle('active', selectMode);
+  }
+
+  function toggleSelected(bid) {
+    if (!selection.delete(bid)) selection.add(bid);
+    renderSelection();
+  }
+
+  // ✕ / Esc: drop the selection and leave select mode entirely
+  function exitSelection() {
+    selection.clear();
+    selectMode = false;
+    renderSelection();
+  }
+
+  function runBatch(action, extra = {}) {
+    const body = new FormData();
+    body.append('week', WEEK);
+    body.append('action', action);
+    selection.forEach(id => body.append('block_ids', id));
+    for (const [k, v] of Object.entries(extra)) body.append(k, v);
+    fetch(BATCH_URL, { method: 'POST', body })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) return;   // error was flashed server-side; shows after reload
+        selection.clear();
+        data.selected.forEach(id => selection.add(id));
+      })
+      .catch(() => {})          // e.g. session expired → reload lands on login
+      .finally(() => location.reload());
+  }
+
+  function deleteSelection() {
+    const n = selection.size;
+    if (confirm(`Delete ${n} block${n === 1 ? '' : 's'}?`)) runBatch('delete');
+  }
+
+  selDup.addEventListener('click', () => runBatch('duplicate'));
+  selDel.addEventListener('click', deleteSelection);
+  document.getElementById('sel-clear').addEventListener('click', exitSelection);
+  selectToggle?.addEventListener('click', () => {
+    if (selectMode) { exitSelection(); return; }
+    selectMode = true;
+    hidePopup();
+    renderSelection();
+  });
+
+  // Keyboard shortcuts.  Registered before the drag-cancel Escape handler
+  // below, so `mode` still reflects an in-progress drag here: Esc cancels the
+  // drag first and only clears the selection when nothing is being dragged.
+  document.addEventListener('keydown', e => {
+    const a = document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;  // typing
+    if (mode) return;
+    if (e.key === 'Escape') {
+      if (selection.size || selectMode) exitSelection();
+    } else if (!selection.size) {
+      return;
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteSelection();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+      e.preventDefault();       // Ctrl+D would otherwise bookmark the page
+      runBatch('duplicate');
+    }
+  });
+
+  // Restore after a reload (same _restoreView rule as the project and scroll).
+  // Ids that no longer exist in the grid (other week, deleted) are dropped.
+  const _savedSel  = _restoreView ? sessionStorage.getItem('plm-selected-blocks') : null;
+  const _savedMode = _restoreView ? sessionStorage.getItem('plm-select-mode') : null;
+  sessionStorage.removeItem('plm-selected-blocks');
+  sessionStorage.removeItem('plm-select-mode');
+  try {
+    JSON.parse(_savedSel || '[]').forEach(id => {
+      if (calOuter.querySelector(`.cal-block[data-block-id="${CSS.escape(id)}"]`)) selection.add(id);
+    });
+  } catch (e) { /* corrupt snapshot — start with an empty selection */ }
+  selectMode = _savedMode === '1';
+  renderSelection();
+
   // ── Block popup ────────────────────────────────────────────────────────────
 
   function showPopup(blockEl, x, y) {
@@ -896,6 +1077,16 @@ main { max-width: 1400px; }
   }
 
   function hidePopup() { popup.style.display = 'none'; }
+
+  // A plain click on a block (no drag, no modifier) behaves like clicking a
+  // file in a file manager: that block becomes the whole selection, and its
+  // popup opens.  Ctrl/Shift-click is the additive path (see mousedown).
+  function clickBlock(blockEl, x, y) {
+    selection.clear();
+    selection.add(blockEl.dataset.blockId);
+    renderSelection();
+    showPopup(blockEl, x, y);
+  }
 
   document.getElementById('popup-duplicate').addEventListener('click', () => {
     postForm(blockUrl(DUP_TPL, popup.dataset.blockId), { week: WEEK });
@@ -993,6 +1184,13 @@ main { max-width: 1400px; }
         e.preventDefault();
         hidePopup();
 
+        // Modifier-click or select mode → toggle selection, no drag/popup.
+        // Also reached by a tap in select mode (mobile synthesises mousedown).
+        if (e.ctrlKey || e.metaKey || e.shiftKey || selectMode) {
+          toggleSelected(blockEl.dataset.blockId);
+          return;
+        }
+
         if (isResizeHandle(blockEl, e.clientY)) {
           // ── Mousedown on resize handle — start a resize gesture ────────────
           mode              = 'resizing';
@@ -1024,6 +1222,14 @@ main { max-width: 1400px; }
           blockEl.style.opacity = '0.35';
         }
       } else {
+        // With a selection (or select mode) active, empty space only clears
+        // the selection — drawing a block here is almost never the intent.
+        if (selection.size || selectMode) {
+          e.preventDefault();
+          selection.clear();
+          renderSelection();
+          return;
+        }
         // Mousedown on empty grid space — start drawing a new block
         if (!selectedPid) return;   // no project selected; ignore
         e.preventDefault();
@@ -1117,7 +1323,7 @@ main { max-width: 1400px; }
       // True click (block never moved) → show popup.
       // Drag that returned to origin → cancel silently (don't show popup).
       if (!moveEverMoved) {
-        showPopup(moveBlockEl, e.clientX, e.clientY);
+        clickBlock(moveBlockEl, e.clientX, e.clientY);
       } else if (finalDay !== moveOrigDay || finalStart !== moveOrigSt) {
         postForm(blockUrl(MOVE_TPL, moveBid), {
           week:       WEEK,
@@ -1137,7 +1343,7 @@ main { max-width: 1400px; }
 
       // Click on the handle (no resize) → show popup; genuine resize → commit
       if (!resizeEverResized) {
-        showPopup(resizeBlockEl, e.clientX, e.clientY);
+        clickBlock(resizeBlockEl, e.clientX, e.clientY);
       } else if (finalEnd !== resizeOrigEnd) {
         postForm(blockUrl(UPD_TPL, resizeBid), {
           week:       WEEK,

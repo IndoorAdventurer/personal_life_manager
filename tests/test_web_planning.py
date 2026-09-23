@@ -852,3 +852,11 @@ class TestBatchBlocks:
                              data={"week": _WEEK, "action": "delete", "block_ids": ["x"]},
                              follow_redirects=False)
         assert resp.status_code in (302, 303)
+
+    def test_page_wires_up_multi_select(self, client: TestClient, store: JsonStore) -> None:
+        """The planning page exposes the batch URL and the selection controls."""
+        self._setup(store, ("monday", "09:00", "10:00"))
+        html = client.get(f"/planning?week={_WEEK}").text
+        assert 'data-batch-url="http://testserver/planning/blocks/batch"' in html
+        assert 'id="sel-bar"' in html
+        assert 'id="select-toggle"' in html
