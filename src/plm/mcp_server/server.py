@@ -32,6 +32,7 @@ from plm.models.planning import TimeBlock, TimeBlockInput, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
 from plm.models.project import Project
 from plm.storage.store import JsonStore
+from plm.timeutil import current_week
 
 # ---------------------------------------------------------------------------
 # Auth (HTTP transport only)
@@ -100,14 +101,6 @@ def _require_card(
         raise ValueError(f"Card {card_id!r} not found in project {project_id!r}")
     col, card = result
     return project, col, card
-
-
-def _current_week() -> str:
-    """Return the current ISO week string, e.g. '2026-W10'."""
-    now = datetime.now(timezone.utc)
-    # isocalendar() returns (year, week, weekday); zero-pad week to 2 digits
-    year, week, _ = now.isocalendar()
-    return f"{year}-W{week:02d}"
 
 
 def _parse_hhmm(value: str, field: str) -> None:
@@ -529,7 +522,7 @@ def get_plan(week: str | None = None) -> dict:
     Returns an empty plan structure if no plan exists for that week yet.
     """
     if week is None:
-        week = _current_week()
+        week = current_week()
     plan = store.get_plan(week)
     if plan is None:
         # Return an empty structure rather than null so the caller doesn't need
@@ -748,7 +741,7 @@ def get_weekly_hours_summary(week: str | None = None) -> dict:
     Hours are calculated from time block durations (end_time - start_time).
     """
     if week is None:
-        week = _current_week()
+        week = current_week()
 
     plan = store.get_plan(week)
     if plan is None:
@@ -950,7 +943,7 @@ def get_weekly_review_data(week: str | None = None) -> dict:
     (e.g. '2026-W09') to review a past week.
     """
     if week is None:
-        week = _current_week()
+        week = current_week()
 
     plan = store.get_plan(week)
     if plan is None:

@@ -21,6 +21,7 @@ import plm.web.app as app_module
 from plm.models.planning import TimeBlock, WeeklyPlan
 from plm.models.project import Project
 from plm.storage.store import JsonStore
+from plm.timeutil import current_week
 
 _TEST_PASSWORD = "test-password"
 _WEEK = "2026-W10"
@@ -82,7 +83,7 @@ class TestPlanningGet:
         """No ?week param → page loads for the current ISO week."""
         resp = client.get("/planning")
         assert resp.status_code == 200
-        assert app_module._current_week() in resp.text
+        assert current_week() in resp.text
 
     def test_explicit_week_shown(self, client: TestClient) -> None:
         """?week=2026-W10 → the week string appears in the page."""
@@ -115,7 +116,7 @@ class TestPlanningGet:
         """A malformed ?week silently falls back to the current week."""
         resp = client.get("/planning?week=../../etc/passwd")
         assert resp.status_code == 200
-        assert app_module._current_week() in resp.text
+        assert current_week() in resp.text
 
     def test_prev_next_links_present(self, client: TestClient) -> None:
         """Prev and Next navigation links contain the adjacent week strings."""
@@ -126,7 +127,7 @@ class TestPlanningGet:
 
     def test_today_link_absent_on_current_week(self, client: TestClient) -> None:
         """'Today' button is hidden when already viewing the current week."""
-        resp = client.get(f"/planning?week={app_module._current_week()}")
+        resp = client.get(f"/planning?week={current_week()}")
         assert resp.status_code == 200
         # The Today anchor only appears when week != current_week
         assert ">Today<" not in resp.text
@@ -634,7 +635,7 @@ class TestDuplicateBlock:
 
 class TestWeekHelpers:
     def test_current_week_format(self) -> None:
-        w = app_module._current_week()
+        w = current_week()
         assert app_module._WEEK_RE.match(w), f"Bad format: {w!r}"
 
     def test_week_offset_forward(self) -> None:

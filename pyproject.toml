@@ -29,6 +29,9 @@ dependencies = [
     # for display in the Profile page.  Server-side rendering keeps the template
     # simple and avoids shipping a JS markdown library to the browser.
     "markdown>=3.0",
+    # tzdata: IANA timezone database for zoneinfo (PLM_TIMEZONE).  python:3.12-slim
+    # ships without /usr/share/zoneinfo, so zoneinfo falls back to this package.
+    "tzdata",
 ]
 
 [project.optional-dependencies]

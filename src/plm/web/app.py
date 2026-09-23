@@ -11,6 +11,7 @@ Environment variables (resolved at startup):
   PLM_DATA_DIR        — override data directory (optional)
   PLM_ROOT_PATH       — e.g. "/plm" when Caddy reverse-proxies at a subpath (optional)
   PLM_PORT            — listening port (optional, default 2026)
+  PLM_TIMEZONE        — IANA zone for "today" / current week (optional, see plm.timeutil)
 """
 
 # ── 1. Imports ──────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ from plm.models.planning import Day, TimeBlock, WeeklyPlan
 from plm.models.profile import BehavioralProfile, ProfileUpdate
 from plm.models.project import Project
 from plm.storage.store import JsonStore
+from plm.timeutil import current_week, today_weekday
 
 # ── 2. Env-var capture (validation happens in main()) ───────────────────────
 # Captured at module level so routes can reference them without re-reading os.environ.
@@ -77,12 +79,6 @@ _WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 
 # Compiled once at module level rather than inside each request handler.
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-
-
-def _current_week() -> str:
-    """Return the current ISO week string, e.g. '2026-W10'."""
-    cal = datetime.now(timezone.utc).isocalendar()
-    return f"{cal.year}-W{cal.week:02d}"
 
 
 def _parse_week_monday(week: str) -> datetime:
@@ -892,7 +888,7 @@ async def planning_page(
     # Silently fall back to the current week for missing or malformed values —
     # bad ?week= params should show a usable page, not an error.
     if week is None or not _validate_week(week):
-        week = _current_week()
+        week = current_week()
 
     # Return the saved plan or a transient empty one; we don't save empty plans
     # to disk so the planning directory stays clean until the user adds content.
@@ -938,11 +934,9 @@ async def planning_page(
     }
 
     # Highlight today's column only when viewing the current week.
-    current_week = _current_week()
-    today_day = (
-        datetime.now(timezone.utc).strftime("%A").lower()
-        if week == current_week else None
-    )
+    # Local time (PLM_TIMEZONE), not UTC — blocks are in local time.
+    this_week = current_week()
+    today_day = today_weekday() if week == this_week else None
 
     # ── Bar chart data ───────────────────────────────────────────────────────
 
@@ -990,7 +984,7 @@ async def planning_page(
     return _render(request, "planning.html", {
         "week": week,
         "week_label": _week_label(week),
-        "current_week": current_week,
+        "current_week": this_week,
         "prev_week": _week_offset(week, -1),
         "next_week": _week_offset(week, 1),
         "plan": plan,
