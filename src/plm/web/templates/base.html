@@ -234,19 +234,23 @@
   {% block head %}{% endblock %}
 </head>
 <body>
+{#- Path relative to the app root.  Behind a reverse-proxy subpath
+    (PLM_ROOT_PATH=/plm) request.url.path includes the prefix, e.g.
+    "/plm/inbox", so strip it before matching against route paths. #}
+{%- set app_path = request.url.path[request.scope.get('root_path', '')|length:] or '/' %}
 
 <nav>
   <a class="nav-brand" href="{{ request.url_for('project_list') }}">
     <img src="{{ request.url_for('static', path='logo-nav.svg') }}" alt="PLM">
   </a>
   <a href="{{ request.url_for('project_list') }}"
-     {% if request.url.path == '/' %}class="active"{% endif %}>Projects</a>
+     {% if app_path == '/' %}class="active"{% endif %}>Projects</a>
   <a href="{{ request.url_for('planning_page') }}"
-     {% if request.url.path.startswith('/planning') %}class="active"{% endif %}>Planning</a>
+     {% if app_path.startswith('/planning') %}class="active"{% endif %}>Planning</a>
   <a href="{{ request.url_for('inbox_page') }}"
-     {% if request.url.path == '/inbox' %}class="active"{% endif %}>Inbox</a>
+     {% if app_path == '/inbox' %}class="active"{% endif %}>Inbox</a>
   <a href="{{ request.url_for('profile_page') }}"
-     {% if request.url.path == '/profile' %}class="active"{% endif %}>Profile</a>
+     {% if app_path == '/profile' %}class="active"{% endif %}>Profile</a>
   <div class="nav-spacer"></div>
   <form method="post" action="{{ request.url_for('logout') }}">
     <button class="nav-logout" type="submit">Logout</button>
@@ -351,7 +355,7 @@
    - it is multi-touch (pinch), turns out mostly vertical (page scroll),
      or ends with text selected (long-press selection drag). */
 (function () {
-  {%- set p = request.url.path %}
+  {%- set p = app_path %}
   {%- if p == '/' or p.startswith('/projects') %}{% set tab_index = 0 %}
   {%- elif p.startswith('/planning') %}{% set tab_index = 1 %}
   {%- elif p == '/inbox' %}{% set tab_index = 2 %}
