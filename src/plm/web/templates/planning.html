@@ -579,7 +579,6 @@ main { max-width: 1400px; }
 #}
 <div class="cal-outer"
      data-add-url="{{ request.url_for('add_block') }}"
-     data-move-url-tpl="{{ request.url_for('move_block', block_id='BLOCK_ID') }}"
      data-del-url-tpl="{{ request.url_for('delete_block', block_id='BLOCK_ID') }}"
      data-dup-url-tpl="{{ request.url_for('duplicate_block', block_id='BLOCK_ID') }}"
      data-update-url-tpl="{{ request.url_for('update_block', block_id='BLOCK_ID') }}"
@@ -824,7 +823,6 @@ main { max-width: 1400px; }
   // "BLOCK_ID" is a placeholder that blockUrl() replaces with the real UUID.
   const calOuter = document.querySelector('.cal-outer');
   const ADD_URL   = calOuter.dataset.addUrl;
-  const MOVE_TPL  = calOuter.dataset.moveUrlTpl;
   const DEL_TPL   = calOuter.dataset.delUrlTpl;
   const DUP_TPL   = calOuter.dataset.dupUrlTpl;
   const UPD_TPL   = calOuter.dataset.updateUrlTpl;
@@ -1122,10 +1120,11 @@ main { max-width: 1400px; }
   let drawPendEl   = null;    // .pending-block overlay
 
   // ── Moving (existing block) state ──────────────────────────────────────────
-  let moveBid      = null;    // block UUID
-  let moveBlockEl  = null;    // the .cal-block DOM element being repositioned
-  let moveOrigDay  = null;    // original day (to detect no-op clicks)
-  let moveOrigSt   = null;    // original start_time string (same purpose)
+  // A move always drags the whole selection; the grabbed block is the
+  // "anchor" whose position follows the pointer, and every other selected
+  // block shifts by the same day/minute delta (see startMove / updateMove).
+  let moveBlockEl  = null;    // the grabbed (anchor) .cal-block element
+  let moveOrigSt   = null;    // anchor's original start_time string
   let moveDurMin   = null;    // block duration in minutes (preserved during move)
   let moveTargetCol= null;    // current .cal-day-col under the pointer
   let moveStartMin = null;    // current snapped start in minutes
@@ -1138,6 +1137,14 @@ main { max-width: 1400px; }
   // Distinguishes a true click (never moved → show popup) from a drag that
   // happens to end at the original position (moved + returned → cancel silently).
   let moveEverMoved = false;
+  let moveOrigIdx   = 0;      // anchor's original day-column index
+  let moveDayDelta  = 0;      // current day shift applied to the whole group
+  // The other selected blocks: {el, dayIdx, start, dur, pend} each, where pend
+  // is that block's own preview overlay.
+  let moveGroup     = [];
+  // Allowed day / minute deltas so no group member leaves the week or the day
+  // — the group stops at the edge instead of being squashed.
+  let moveBounds    = { dMin: 0, dMax: 0, mMin: 0, mMax: 0 };
 
   // ── Resizing (existing block bottom edge) state ────────────────────────────
   let resizeBid          = null;  // block UUID
@@ -1174,6 +1181,103 @@ main { max-width: 1400px; }
     el.style.height = Math.max(durMin * HOUR_PX / 60, 6) + 'px';
   }
 
+  // ── Move gesture (shared by mouse and touch) ───────────────────────────────
+
+  function dayIndex(el) { return dayCols.findIndex(c => c.dataset.day === el.dataset.day); }
+
+  // Begin moving blockEl, grabbed at clientY.  Grabbing a selected block drags
+  // the whole selection; grabbing an unselected one makes it the selection
+  // first (file-manager semantics) — except in select mode, where the user is
+  // building a selection, so it is added instead.
+  function startMove(blockEl, col, clientY) {
+    const bid = blockEl.dataset.blockId;
+    if (!selection.has(bid)) {
+      if (!selectMode) selection.clear();
+      selection.add(bid);
+      renderSelection();
+    }
+
+    mode          = 'moving';
+    moveBlockEl   = blockEl;
+    moveOrigSt    = blockEl.dataset.start;
+    moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
+    moveTargetCol = col;
+    moveStartMin  = fromTime(blockEl.dataset.start);
+    moveOrigIdx   = dayIndex(blockEl);
+    moveDayDelta  = 0;
+    // Record how far below the block's top the pointer is so the block moves
+    // with the pointer rather than snapping its top to it.
+    moveGrabOffsetMin = clientYToMin(clientY) - moveStartMin;
+    moveEverMoved     = false;
+    movePendEl        = makePending(col, moveStartMin, moveDurMin);
+
+    const members = [...selection]
+      .map(id => calOuter.querySelector(`.cal-block[data-block-id="${CSS.escape(id)}"]`))
+      .filter(Boolean);
+    const idxs = members.map(dayIndex);
+    moveBounds = {
+      dMin: -Math.min(...idxs),
+      dMax: dayCols.length - 1 - Math.max(...idxs),
+      mMin: -Math.min(...members.map(el => fromTime(el.dataset.start))),
+      mMax: 23 * 60 + 59 - Math.max(...members.map(el => fromTime(el.dataset.end))),
+    };
+    moveGroup = members.filter(el => el !== blockEl).map(el => {
+      const dayIdx = dayIndex(el);
+      const start  = fromTime(el.dataset.start);
+      const dur    = fromTime(el.dataset.end) - start;
+      return { el, dayIdx, start, dur, pend: makePending(dayCols[dayIdx], start, dur) };
+    });
+    // Dim the originals to signal they are being repositioned
+    members.forEach(el => { el.style.opacity = '0.35'; });
+  }
+
+  // Follow the pointer: shift the anchor (and with it the group) within bounds
+  function updateMove(clientX, clientY) {
+    const hoverCol = colAtX(clientX);
+    if (hoverCol) {
+      moveDayDelta = clamp(dayCols.indexOf(hoverCol) - moveOrigIdx,
+                           moveBounds.dMin, moveBounds.dMax);
+    }
+    const targetCol = dayCols[moveOrigIdx + moveDayDelta];
+    if (targetCol !== moveTargetCol) {
+      targetCol.appendChild(movePendEl);   // appendChild moves it out of the old column
+      moveTargetCol = targetCol;
+    }
+    // Subtract the grab offset so the block moves with the pointer
+    const origStart = fromTime(moveOrigSt);
+    const curMin    = clientYToMin(clientY) - moveGrabOffsetMin;
+    moveStartMin    = clamp(curMin, origStart + moveBounds.mMin, origStart + moveBounds.mMax);
+    if (moveStartMin !== origStart || moveDayDelta !== 0) moveEverMoved = true;
+    updatePending(movePendEl, moveStartMin, moveDurMin);
+
+    const minuteDelta = moveStartMin - origStart;
+    moveGroup.forEach(m => {
+      const col = dayCols[m.dayIdx + moveDayDelta];
+      if (m.pend.parentNode !== col) col.appendChild(m.pend);
+      updatePending(m.pend, m.start + minuteDelta, m.dur);
+    });
+  }
+
+  // Tear down the previews; returns the final deltas (both 0 = no-op).
+  // Used for commit and cancel alike.
+  function endMove() {
+    moveBlockEl.style.opacity = '';
+    movePendEl?.remove();
+    movePendEl = null;
+    moveGroup.forEach(m => { m.el.style.opacity = ''; m.pend.remove(); });
+    moveGroup = [];
+    mode = null;
+    return { dayDelta: moveDayDelta, minuteDelta: moveStartMin - fromTime(moveOrigSt) };
+  }
+
+  // Save a finished move.  Single blocks go through the batch route too, so
+  // there is one move path; the moved blocks stay selected after the reload.
+  function commitMove({ dayDelta, minuteDelta }) {
+    if (dayDelta || minuteDelta) {
+      runBatch('move', { day_offset: dayDelta, minute_offset: minuteDelta });
+    }
+  }
+
   // ── Mousedown: initiate drawing or moving ──────────────────────────────────
 
   dayCols.forEach(col => {
@@ -1205,21 +1309,7 @@ main { max-width: 1400px; }
           blockEl.style.opacity = '0.35';
         } else {
           // ── Mousedown on block body — start a move gesture ─────────────────
-          mode          = 'moving';
-          moveBlockEl   = blockEl;
-          moveBid       = blockEl.dataset.blockId;
-          moveOrigDay   = blockEl.dataset.day;
-          moveOrigSt    = blockEl.dataset.start;
-          moveDurMin    = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
-          moveTargetCol = col;
-          moveStartMin  = fromTime(blockEl.dataset.start);
-          // Record how far below the block's top the cursor is so the block
-          // moves with the pointer rather than snapping its top to the cursor.
-          moveGrabOffsetMin = clientYToMin(e.clientY) - moveStartMin;
-          moveEverMoved     = false;
-          movePendEl    = makePending(col, moveStartMin, moveDurMin);
-          // Dim the original to signal it is being repositioned
-          blockEl.style.opacity = '0.35';
+          startMove(blockEl, col, e.clientY);
         }
       } else {
         // With a selection (or select mode) active, empty space only clears
@@ -1254,22 +1344,7 @@ main { max-width: 1400px; }
       updatePending(drawPendEl, lo, dur);
 
     } else if (mode === 'moving') {
-      // Switch the pending overlay to whichever column the pointer entered
-      const targetCol = colAtX(e.clientX);
-      if (targetCol && targetCol !== moveTargetCol) {
-        moveTargetCol.removeChild(movePendEl);
-        targetCol.appendChild(movePendEl);
-        moveTargetCol = targetCol;
-      }
-      // Subtract the grab offset so the block moves with the cursor rather
-      // than snapping its top to the cursor position.
-      const curMin    = clientYToMin(e.clientY) - moveGrabOffsetMin;
-      const newStart  = clamp(curMin, 0, 23 * 60 + 59 - moveDurMin);
-      if (newStart !== fromTime(moveOrigSt) || moveTargetCol.dataset.day !== moveOrigDay) {
-        moveEverMoved = true;
-      }
-      moveStartMin = newStart;
-      updatePending(movePendEl, moveStartMin, moveDurMin);
+      updateMove(e.clientX, e.clientY);
 
     } else if (mode === 'resizing') {
       const curMin = clientYToMin(e.clientY);
@@ -1310,27 +1385,13 @@ main { max-width: 1400px; }
       });
 
     } else if (mode === 'moving') {
-      const finalDay   = moveTargetCol.dataset.day;
-      const finalStart = toTime(moveStartMin);
-      const endMin     = clamp(moveStartMin + moveDurMin, moveStartMin + SNAP_MIN, 23 * 60 + 59);
-      const finalEnd   = toTime(endMin);
-
-      moveBlockEl.style.opacity = '';
-      movePendEl.remove();
-      movePendEl = null;
-      mode       = null;
-
-      // True click (block never moved) → show popup.
-      // Drag that returned to origin → cancel silently (don't show popup).
+      const deltas = endMove();
+      // True click (block never moved) → select it + show popup.
+      // Drag that returned to origin → no-op deltas, cancels silently.
       if (!moveEverMoved) {
         clickBlock(moveBlockEl, e.clientX, e.clientY);
-      } else if (finalDay !== moveOrigDay || finalStart !== moveOrigSt) {
-        postForm(blockUrl(MOVE_TPL, moveBid), {
-          week:       WEEK,
-          day:        finalDay,
-          start_time: finalStart,
-          end_time:   finalEnd,
-        });
+      } else {
+        commitMove(deltas);
       }
 
     } else if (mode === 'resizing') {
@@ -1363,9 +1424,7 @@ main { max-width: 1400px; }
       drawPendEl?.remove();
       drawPendEl = null;
     } else if (mode === 'moving') {
-      moveBlockEl.style.opacity = '';
-      movePendEl?.remove();
-      movePendEl = null;
+      endMove();
     } else if (mode === 'resizing') {
       resizeBlockEl.style.opacity = '';
       resizePendEl?.remove();
@@ -1444,19 +1503,8 @@ main { max-width: 1400px; }
           blockEl.style.opacity = '0.35';
         } else {
           // ── Long-press on block body → move mode ───────────────────────────
-          moveFromTouch     = true;
-          mode              = 'moving';
-          moveBlockEl       = blockEl;
-          moveBid           = blockEl.dataset.blockId;
-          moveOrigDay       = blockEl.dataset.day;
-          moveOrigSt        = blockEl.dataset.start;
-          moveDurMin        = fromTime(blockEl.dataset.end) - fromTime(blockEl.dataset.start);
-          moveTargetCol     = col;
-          moveStartMin      = fromTime(blockEl.dataset.start);
-          moveGrabOffsetMin = clientYToMin(longPressStartY) - fromTime(blockEl.dataset.start);
-          moveEverMoved     = false;
-          movePendEl        = makePending(col, moveStartMin, moveDurMin);
-          blockEl.style.opacity = '0.35';
+          moveFromTouch = true;
+          startMove(blockEl, col, longPressStartY);
         }
       }, LONG_PRESS_MS);
     }, { passive: true });   // passive — never block scroll during the hold phase
@@ -1480,22 +1528,7 @@ main { max-width: 1400px; }
     // ── Active move drag ─────────────────────────────────────────────────────
     if (mode === 'moving' && moveFromTouch) {
       e.preventDefault();   // freeze page scroll while the block is being moved
-      const touch     = e.touches[0];
-      const targetCol = colAtX(touch.clientX);
-      if (targetCol && targetCol !== moveTargetCol) {
-        moveTargetCol.removeChild(movePendEl);
-        targetCol.appendChild(movePendEl);
-        moveTargetCol = targetCol;
-      }
-      // Subtract the grab offset so the block moves with the finger rather
-      // than snapping its top to the touch point.
-      const curMin   = clientYToMin(touch.clientY) - moveGrabOffsetMin;
-      const newStart = clamp(curMin, 0, 23 * 60 + 59 - moveDurMin);
-      if (newStart !== fromTime(moveOrigSt) || moveTargetCol.dataset.day !== moveOrigDay) {
-        moveEverMoved = true;
-      }
-      moveStartMin = newStart;
-      updatePending(movePendEl, moveStartMin, moveDurMin);
+      updateMove(e.touches[0].clientX, e.touches[0].clientY);
 
     } else if (mode === 'resizing' && resizeFromTouch) {
       e.preventDefault();
@@ -1522,25 +1555,9 @@ main { max-width: 1400px; }
       // after touchend and accidentally re-trigger the mouse move handler.
       e.preventDefault();
 
-      const finalDay   = moveTargetCol.dataset.day;
-      const finalStart = toTime(moveStartMin);
-      const endMin     = clamp(moveStartMin + moveDurMin, moveStartMin + SNAP_MIN, 23 * 60 + 59);
-      const finalEnd   = toTime(endMin);
-
-      moveBlockEl.style.opacity = '';
-      movePendEl.remove();
-      movePendEl = null;
-      mode       = null;
-
-      // Long-press with no movement → cancel quietly (popup is for taps only)
-      if (finalDay !== moveOrigDay || finalStart !== moveOrigSt) {
-        postForm(blockUrl(MOVE_TPL, moveBid), {
-          week:       WEEK,
-          day:        finalDay,
-          start_time: finalStart,
-          end_time:   finalEnd,
-        });
-      }
+      // Long-press with no movement → no-op deltas, cancels quietly
+      // (the popup is for taps only)
+      commitMove(endMove());
 
     } else if (mode === 'resizing' && resizeFromTouch) {
       resizeFromTouch = false;
@@ -1571,10 +1588,7 @@ main { max-width: 1400px; }
     }
     if (mode === 'moving' && moveFromTouch) {
       moveFromTouch = false;
-      moveBlockEl.style.opacity = '';
-      movePendEl?.remove();
-      movePendEl = null;
-      mode       = null;
+      endMove();
     } else if (mode === 'resizing' && resizeFromTouch) {
       resizeFromTouch = false;
       resizeBlockEl.style.opacity = '';
