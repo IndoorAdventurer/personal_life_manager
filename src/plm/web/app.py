@@ -36,6 +36,7 @@ from starlette.responses import Response
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from plm.colors import PALETTE, palette_index, project_color
 from plm.models.card import CardLog, KanbanCard, normalize_tags
 from plm.models.inbox import InboxNote
 from plm.models.planning import Day, TimeBlock, WeeklyPlan
@@ -119,34 +120,9 @@ def _week_label(week: str) -> str:
 
 # ── 3c. Calendar grid helpers ────────────────────────────────────────────────
 
-# Predefined palette — 10 perceptually distinct colours chosen to look good on
-# both white card backgrounds and dark nav.  Index is determined by hashing the
-# project UUID so the same project always gets the same colour.
-_PROJECT_COLORS: list[str] = [
-    "#3b82f6",  # blue
-    "#10b981",  # emerald
-    "#f59e0b",  # amber
-    "#ef4444",  # red
-    "#8b5cf6",  # violet
-    "#06b6d4",  # cyan
-    "#f97316",  # orange
-    "#84cc16",  # lime
-    "#ec4899",  # pink
-    "#6366f1",  # indigo
-]
-
 # Pixels per hour in the calendar grid.  Must match the CSS --hour-px variable
 # in planning.html (1440 px total = 24 × 60).
 _HOUR_PX = 60
-
-
-def _project_color(project_id: str) -> str:
-    """Deterministic colour for a project derived from its UUID bytes.
-
-    sum(bytes) mod palette_length — stable across restarts, no external dep.
-    UUIDs have enough byte variation that adjacent IDs rarely get the same colour.
-    """
-    return _PROJECT_COLORS[sum(project_id.encode()) % len(_PROJECT_COLORS)]
 
 
 def _tag_color(tag: str) -> str:
@@ -157,7 +133,7 @@ def _tag_color(tag: str) -> str:
     side effect: tags differing in one character, like v0.1 / v0.2 / v0.3,
     land on neighbouring — and therefore distinct — palette colours.
     """
-    return _PROJECT_COLORS[sum(tag.lower().encode()) % len(_PROJECT_COLORS)]
+    return PALETTE[palette_index(tag.lower())][0]
 
 
 templates.env.filters["tag_color"] = _tag_color
@@ -920,7 +896,7 @@ async def planning_page(
             "block": block,
             "top": _block_top(block),
             "height": _block_height(block),
-            "color": _project_color(block.project_id),
+            "color": project_color(block.project_id),
             "name": proj.name if proj else "(deleted project)",
         })
 
@@ -958,7 +934,7 @@ async def planning_page(
         [
             {
                 "name": p.name,
-                "color": _project_color(p.id),
+                "color": project_color(p.id),
                 "planned": ph.get(p.id, 0),
                 "target": p.target_weekly_hours,
                 # Percentages drive CSS widths; kept to 1 decimal to avoid
@@ -979,7 +955,7 @@ async def planning_page(
     # Colour lookup used by the project palette chips in the template.
     # Includes all projects (not just active) so archived-project blocks still
     # get the right colour when shown in enriched_blocks.
-    project_colors = {p.id: _project_color(p.id) for p in all_projects}
+    project_colors = {p.id: project_color(p.id) for p in all_projects}
 
     return _render(request, "planning.html", {
         "week": week,

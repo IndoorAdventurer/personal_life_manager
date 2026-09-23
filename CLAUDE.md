@@ -131,6 +131,8 @@ python-multipart>=0.0.12
 itsdangerous>=2.0
 watchdog>=3.0.0
 markdown>=3.0
+tzdata
+icalendar>=6.0
 
 [dev]
 pytest>=8.0.0

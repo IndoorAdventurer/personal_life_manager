@@ -32,6 +32,8 @@ dependencies = [
     # tzdata: IANA timezone database for zoneinfo (PLM_TIMEZONE).  python:3.12-slim
     # ships without /usr/share/zoneinfo, so zoneinfo falls back to this package.
     "tzdata",
+    # icalendar: builds the ICS feed (escaping, line folding, VALARM) — see plm.ical.
+    "icalendar>=6.0",
 ]
 
 [project.optional-dependencies]
