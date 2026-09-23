@@ -167,8 +167,70 @@
     }
     .card + .card { margin-top: 0.75rem; }
 
+    /* ── Swipe tab transition ─────────────────────────────────────────── */
+    /* Opt in to cross-document View Transitions.  Every same-origin
+       navigation would now animate, so the pageswap/pagereveal handlers in
+       <head> skip the transition unless the navigation came from a tab
+       swipe — ordinary link clicks and form redirects stay instant.
+       Browsers without support simply navigate without animation. */
+    @view-transition { navigation: auto; }
+    /* Own transition group for the nav so it stays put while the page
+       content slides underneath it. */
+    nav { view-transition-name: plm-nav; }
+
+    @keyframes plm-out-left  { to   { transform: translateX(-100%); } }
+    @keyframes plm-out-right { to   { transform: translateX(100%); } }
+    @keyframes plm-in-left   { from { transform: translateX(-100%); } }
+    @keyframes plm-in-right  { from { transform: translateX(100%); } }
+
+    /* swipe-next: finger moved left → old page leaves left, new enters from right */
+    html:active-view-transition-type(swipe-next)::view-transition-old(root) {
+      animation: 220ms ease-in both plm-out-left;
+    }
+    html:active-view-transition-type(swipe-next)::view-transition-new(root) {
+      animation: 220ms ease-out both plm-in-right;
+    }
+    html:active-view-transition-type(swipe-prev)::view-transition-old(root) {
+      animation: 220ms ease-in both plm-out-right;
+    }
+    html:active-view-transition-type(swipe-prev)::view-transition-new(root) {
+      animation: 220ms ease-out both plm-in-left;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
+    }
+
     {% block extra_style %}{% endblock %}
   </style>
+  <script>
+  /* Swipe transition hand-off between the departing and the arriving page.
+     The swipe handler (end of <body>) stores the direction in sessionStorage
+     just before navigating.  Must run in <head>: pagereveal fires before the
+     new page's first render, so a listener added later would miss it. */
+  (function () {
+    var KEY = 'plm-swipe-dir';
+    function readDir() {
+      try { return sessionStorage.getItem(KEY); } catch (e) { return null; }
+    }
+
+    // Departing page: only swipe navigations get a transition
+    window.addEventListener('pageswap', function (e) {
+      if (e.viewTransition && !readDir()) e.viewTransition.skipTransition();
+    });
+
+    // Arriving page: tag the transition with its direction for the CSS above
+    window.addEventListener('pagereveal', function (e) {
+      var dir = readDir();
+      try { sessionStorage.removeItem(KEY); } catch (err) { /* storage blocked */ }
+      if (!e.viewTransition) return;
+      if (dir === 'next' || dir === 'prev') {
+        e.viewTransition.types.add('swipe-' + dir);
+      } else {
+        e.viewTransition.skipTransition();
+      }
+    });
+  })();
+  </script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -271,6 +333,114 @@
   }
 
   connect();
+})();
+</script>
+
+<script>
+/* Horizontal swipe to move between the top-level tabs (touch only).
+   Swipe left → next tab, swipe right → previous; wraps around at both ends.
+
+   A gesture is ignored when:
+   - it starts inside something that scrolls horizontally itself (board
+     columns, the nav bar on narrow screens, code blocks) — those swipes
+     belong to that element;
+   - another handler called preventDefault on a touchmove — that is how the
+     planning block drag and SortableJS freeze the page while dragging.
+     This listener is registered last on window, so it sees their result;
+   - a form field is focused (unsaved input);
+   - it is multi-touch (pinch), turns out mostly vertical (page scroll),
+     or ends with text selected (long-press selection drag). */
+(function () {
+  {%- set p = request.url.path %}
+  {%- if p == '/' or p.startswith('/projects') %}{% set tab_index = 0 %}
+  {%- elif p.startswith('/planning') %}{% set tab_index = 1 %}
+  {%- elif p == '/inbox' %}{% set tab_index = 2 %}
+  {%- elif p == '/profile' %}{% set tab_index = 3 %}
+  {%- else %}{% set tab_index = -1 %}{% endif %}
+  var TABS = [
+    '{{ request.url_for("project_list") }}',
+    '{{ request.url_for("planning_page") }}',
+    '{{ request.url_for("inbox_page") }}',
+    '{{ request.url_for("profile_page") }}'
+  ];
+  var current = {{ tab_index }};
+  if (current < 0) return;  // not a tab page
+
+  var AXIS_LOCK_PX   = 10;    // travel before deciding horizontal vs vertical
+  var MIN_FRACTION   = 0.25;  // a slow drag must cover this much of the screen…
+  var FLICK_MIN_PX   = 50;    // …or a quick flick at least this far…
+  var FLICK_PX_PER_MS = 0.4;  // …at this speed
+
+  var start = null;  // {x, y, t} of the current candidate gesture
+
+  // Feedback overlay: darkens as the finger travels, reaching full strength
+  // once the swipe is far enough to navigate.  pointer-events:none keeps it
+  // from ever intercepting taps.
+  var shade = document.createElement('div');
+  shade.style.cssText = 'position:fixed;inset:0;background:#0f172a;opacity:0;' +
+                        'pointer-events:none;z-index:1000;transition:opacity 150ms';
+  document.body.appendChild(shade);
+  function setShade(dx) {
+    var progress = Math.min(1, Math.abs(dx) / (window.innerWidth * MIN_FRACTION));
+    shade.style.transition = dx ? 'none' : 'opacity 150ms';  // track finger 1:1, fade out on release
+    shade.style.opacity = String(progress * 0.25);
+  }
+
+  function scrollsHorizontally(el) {
+    for (; el && el !== document.body; el = el.parentElement) {
+      var ox = getComputedStyle(el).overflowX;
+      if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth) return true;
+    }
+    return false;
+  }
+
+  window.addEventListener('touchstart', function (e) {
+    start = null;
+    if (e.touches.length !== 1 || scrollsHorizontally(e.target)) return;
+    // Don't navigate away from a half-typed form field
+    var a = document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    var t = e.touches[0];
+    start = { x: t.clientX, y: t.clientY, t: e.timeStamp, locked: false };
+  }, { passive: true });
+
+  window.addEventListener('touchmove', function (e) {
+    if (!start) return;
+    if (e.touches.length !== 1 || e.defaultPrevented) { start = null; setShade(0); return; }
+    var t = e.touches[0];
+    if (start.locked) { setShade(t.clientX - start.x); return; }
+    var dx = Math.abs(t.clientX - start.x);
+    var dy = Math.abs(t.clientY - start.y);
+    if (Math.max(dx, dy) < AXIS_LOCK_PX) return;
+    // First decisive movement is vertical → the user is scrolling the page
+    if (dy >= dx) { start = null; return; }
+    start.locked = true;
+  }, { passive: true });
+
+  window.addEventListener('touchcancel', function () { start = null; setShade(0); });
+
+  window.addEventListener('touchend', function (e) {
+    setShade(0);
+    if (!start || !start.locked) { start = null; return; }
+    var t  = e.changedTouches[0];
+    var dx = t.clientX - start.x;
+    var dy = t.clientY - start.y;
+    var dt = Math.max(1, e.timeStamp - start.t);
+    start = null;
+
+    if (Math.abs(dx) < 1.5 * Math.abs(dy)) return;  // drifted diagonal
+    var sel = window.getSelection && window.getSelection();
+    if (sel && sel.toString()) return;
+    var far   = Math.abs(dx) >= window.innerWidth * MIN_FRACTION;
+    var flick = Math.abs(dx) >= FLICK_MIN_PX && Math.abs(dx) / dt >= FLICK_PX_PER_MS;
+    if (!far && !flick) return;
+
+    var dir    = dx < 0 ? 'next' : 'prev';
+    var target = (current + (dir === 'next' ? 1 : -1) + TABS.length) % TABS.length;
+    // Read by the pageswap/pagereveal handlers in <head> to animate the slide
+    try { sessionStorage.setItem('plm-swipe-dir', dir); } catch (err) { /* no animation */ }
+    window.location.href = TABS[target];
+  });
 })();
 </script>
 
