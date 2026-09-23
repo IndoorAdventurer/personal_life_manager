@@ -666,3 +666,67 @@ class TestWeekHelpers:
         label = app_module._week_label("2026-W14")
         assert "Mar" in label
         assert "Apr" in label
+
+
+# ---------------------------------------------------------------------------
+# Overlap shading
+# ---------------------------------------------------------------------------
+
+class TestOverlapRanges:
+    def _ranges(self, *spans: tuple[str, str]) -> list[tuple[int, int]]:
+        return app_module._overlap_ranges(
+            [_make_block("p", start=s, end=e) for s, e in spans]
+        )
+
+    def test_no_overlap(self) -> None:
+        assert self._ranges(("09:00", "10:00"), ("11:00", "12:00")) == []
+
+    def test_touching_blocks_do_not_overlap(self) -> None:
+        """One block ending exactly when the next starts is not a clash."""
+        assert self._ranges(("09:00", "10:00"), ("10:00", "11:00")) == []
+
+    def test_partial_overlap(self) -> None:
+        assert self._ranges(("09:00", "10:30"), ("10:00", "11:00")) == [(600, 630)]
+
+    def test_contained_block(self) -> None:
+        """A block fully inside another overlaps for its whole duration."""
+        assert self._ranges(("09:00", "12:00"), ("10:00", "11:00")) == [(600, 660)]
+
+    def test_unsorted_input(self) -> None:
+        assert self._ranges(("10:00", "11:00"), ("09:00", "10:30")) == [(600, 630)]
+
+    def test_chained_overlaps_merge(self) -> None:
+        """A–B and B–C clashes that touch render as one band."""
+        assert self._ranges(
+            ("09:00", "10:30"), ("10:00", "11:30"), ("10:30", "12:00")
+        ) == [(600, 690)]
+
+    def test_separate_overlaps_stay_separate(self) -> None:
+        assert self._ranges(
+            ("09:00", "10:00"), ("09:30", "10:00"),
+            ("14:00", "15:00"), ("14:30", "16:00"),
+        ) == [(570, 600), (870, 900)]
+
+
+class TestOverlapRendering:
+    def test_band_rendered_for_overlap(self, client: TestClient, store: JsonStore) -> None:
+        p = _make_project(store)
+        plan = _make_plan(store)
+        plan.time_blocks += [
+            _make_block(p.id, start="09:00", end="10:30"),
+            _make_block(p.id, start="10:00", end="11:00"),
+        ]
+        store.save_plan(plan)
+        html = client.get(f"/planning?week={_WEEK}").text
+        # 10:00 → 600 px top, 30 min → 30 px tall (_HOUR_PX = 60)
+        assert 'class="cal-overlap" style="top: 600px; height: 30px;"' in html
+
+    def test_no_band_without_overlap(self, client: TestClient, store: JsonStore) -> None:
+        p = _make_project(store)
+        plan = _make_plan(store)
+        plan.time_blocks += [
+            _make_block(p.id, day="monday"),
+            _make_block(p.id, day="tuesday"),  # same time, different day
+        ]
+        store.save_plan(plan)
+        assert 'class="cal-overlap"' not in client.get(f"/planning?week={_WEEK}").text

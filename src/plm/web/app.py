@@ -182,6 +182,38 @@ def _block_height(block: TimeBlock) -> int:
     return max(duration_min * _HOUR_PX // 60, 15)
 
 
+def _overlap_ranges(blocks: list[TimeBlock]) -> list[tuple[int, int]]:
+    """Return the merged (start_min, end_min) ranges where blocks overlap.
+
+    blocks are assumed to be on the same day.  Overlaps are allowed (not
+    prevented) — the calendar only shades these ranges so clashes are visible.
+
+    Sweep in start order, tracking the furthest end seen so far ("reach").
+    A block starting before reach intersects an earlier block, and its
+    largest intersection is with whichever earlier block reaches furthest:
+    [start, min(end, reach)].  That gives the union of all pairwise
+    intersections without comparing every pair.
+    """
+    def to_min(t: str) -> int:
+        h, m = map(int, t.split(":"))
+        return h * 60 + m
+
+    ranges: list[tuple[int, int]] = []
+    reach = -1
+    for b in sorted(blocks, key=lambda b: to_min(b.start_time)):
+        start, end = to_min(b.start_time), to_min(b.end_time)
+        if start < reach:
+            seg = (start, min(end, reach))
+            # Merge with the previous range when they touch, so three-way
+            # clashes render as one continuous band.
+            if ranges and seg[0] <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], seg[1]))
+            else:
+                ranges.append(seg)
+        reach = max(reach, end)
+    return ranges
+
+
 def _planned_hours(blocks: list[TimeBlock]) -> dict[str, float]:
     """Return {project_id: total_planned_hours} for a list of time blocks."""
     totals: dict[str, float] = defaultdict(float)
@@ -896,6 +928,15 @@ async def planning_page(
             "name": proj.name if proj else "(deleted project)",
         })
 
+    # Pixel geometry of the shaded bands drawn where a day's blocks overlap.
+    overlaps = {
+        day: [
+            {"top": s * _HOUR_PX // 60, "height": (e - s) * _HOUR_PX // 60}
+            for s, e in _overlap_ranges([item["block"] for item in items])
+        ]
+        for day, items in enriched_blocks.items()
+    }
+
     # Highlight today's column only when viewing the current week.
     current_week = _current_week()
     today_day = (
@@ -960,6 +1001,7 @@ async def planning_page(
         # Calendar grid
         "day_headers": day_headers,
         "enriched_blocks": enriched_blocks,
+        "overlaps": overlaps,
         "today_day": today_day,
         "hour_px": _HOUR_PX,
         # Bar chart

@@ -172,6 +172,25 @@ main { max-width: 1400px; }
   -webkit-touch-callout: none;  /* iOS: suppress copy/share callout on long-press */
 }
 /*
+ * Overlap band: hatched red stripes over the minutes where two or more blocks
+ * clash.  Sits above the blocks (z-index 2) but ignores the pointer, so taps,
+ * drags and resizes still reach the block underneath.
+ */
+.cal-overlap {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 4px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(220, 38, 38, 0.55) 0 4px,
+    transparent 4px 8px
+  );
+  outline: 1px solid rgba(220, 38, 38, 0.8);
+  pointer-events: none;
+  z-index: 2;
+}
+/*
  * Resize handle: the bottom 8px of every block shows a slightly darker strip
  * and an ns-resize cursor to hint the block is vertically resizable.
  * The ::after pseudo-element sits inside the block (overflow:hidden clips it
@@ -570,6 +589,11 @@ main { max-width: 1400px; }
           <span class="cal-block-notes">{{ item.block.notes }}</span>
           {% endif %}
         </div>
+        {% endfor %}
+
+        {# Hatched bands where blocks overlap (drawn above the blocks) #}
+        {% for band in overlaps[day] %}
+        <div class="cal-overlap" style="top: {{ band.top }}px; height: {{ band.height }}px;"></div>
         {% endfor %}
 
       </div>
