@@ -70,7 +70,7 @@ seamless.
 | **Weekly planner** | Scrollable 24-hour calendar grid, color-coded by project, with a bar chart showing planned vs. target hours |
 | **Inbox** | Quick-capture notes that Claude can later triage, file, or act on |
 | **Behavioral profile** | Free-form Markdown document Claude maintains about your working style, preferences, and habits — with a full audit trail |
-| **Calendar feed** | Subscribable ICS feed of your time blocks (Google Calendar, Apple Calendar, …) with reminders at the start and end of each block |
+| **Calendar feed** | Subscribable ICS feed of your time blocks with reminders at the start and end of each block. Works directly with Google Calendar, Apple Calendar, … (on Android, [ICSx⁵](https://icsx5.bitfire.at/) adds hourly sync, project colours and the reminders — [setup](docs/pi-deployment.md#8-calendar-feed-ics)) |
 | **Live sync** | The web UI auto-reloads whenever Claude (or anything else) changes a data file on disk |
 | **MCP tools** | 34 tools that let Claude read and update everything — projects, cards, time blocks, inbox, and profile — without leaving the conversation |
 | **Resources** | A first-time setup prompt and reusable slash commands (e.g. `/weekly-review`) for structured planning sessions |

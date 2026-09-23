@@ -459,7 +459,12 @@ a secret token in the URL instead — treat the URL like a password.
 4. Subscribe:
    - **Google Calendar** (web): *Other calendars* → **+** → *From URL* → paste the URL.
    - **Apple Calendar**: *File* → *New Calendar Subscription*.
-   - **Android**: [ICSx⁵](https://icsx5.bitfire.at/) syncs the feed into the phone's calendar.
+   - **Android** (recommended): [ICSx⁵](https://icsx5.bitfire.at/) syncs the feed into
+     the phone's calendar, keeping the project colours and start/end reminders. It's
+     free on [F-Droid](https://f-droid.org/packages/at.bitfire.icsdroid/) (paid on
+     Google Play). The calendar then also shows up in the Google Calendar app and
+     widget — tick it in the app's side menu (☰), under the ICSx⁵ section. On Samsung,
+     set ICSx⁵'s battery usage to *Unrestricted* so syncs aren't delayed.
 
 Notes:
 
