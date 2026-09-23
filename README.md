@@ -70,6 +70,7 @@ seamless.
 | **Weekly planner** | Scrollable 24-hour calendar grid, color-coded by project, with a bar chart showing planned vs. target hours |
 | **Inbox** | Quick-capture notes that Claude can later triage, file, or act on |
 | **Behavioral profile** | Free-form Markdown document Claude maintains about your working style, preferences, and habits — with a full audit trail |
+| **Calendar feed** | Subscribable ICS feed of your time blocks (Google Calendar, Apple Calendar, …) with reminders at the start and end of each block |
 | **Live sync** | The web UI auto-reloads whenever Claude (or anything else) changes a data file on disk |
 | **MCP tools** | 34 tools that let Claude read and update everything — projects, cards, time blocks, inbox, and profile — without leaving the conversation |
 | **Resources** | A first-time setup prompt and reusable slash commands (e.g. `/weekly-review`) for structured planning sessions |
@@ -220,6 +221,8 @@ pytest -v
 | `PLM_DATA_DIR` | No | `~/.local/share/plm/` | Override data directory |
 | `PLM_PORT` | No | `2026` | Web UI listening port |
 | `PLM_ROOT_PATH` | No | `""` | Subpath prefix for reverse-proxy deployments (e.g. `/plm`) |
+| `PLM_TIMEZONE` | No | `Europe/Amsterdam` | IANA timezone of your time blocks — decides "today", the current week, and the UTC times in the calendar feed |
+| `PLM_ICAL_TOKEN` | No | — | Secret for the `/calendar.ics` feed; the feed is disabled (404) while unset. See [docs/pi-deployment.md § 8](docs/pi-deployment.md#8-calendar-feed-ics) |
 | `WORKOS_AUTHKIT_DOMAIN` | Remote MCP only | — | AuthKit domain, e.g. `your-slug.authkit.app` |
 | `PLM_MCP_BASE_URL` | Remote MCP only | — | Public URL of the MCP server, e.g. `https://your.domain.com/plm-mcp` |
 | `PLM_MCP_PORT` | No | `2027` | Remote MCP server listening port |

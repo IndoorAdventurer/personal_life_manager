@@ -214,6 +214,17 @@ class JsonStore:
             return None
         return WeeklyPlan.model_validate_json(path.read_text("utf-8"))
 
+    def list_plan_weeks(self) -> list[str]:
+        """Return the week strings of all saved plans, oldest first.
+
+        ISO week strings ("YYYY-Www", zero-padded) sort chronologically as
+        plain strings.  The fullmatch skips .tmp leftovers and stray files.
+        """
+        return sorted(
+            path.stem for path in self._planning_dir.glob("*.json")
+            if re.fullmatch(r"\d{4}-W\d{2}", path.stem)
+        )
+
     def save_plan(self, plan: WeeklyPlan) -> None:
         """Persist *plan*, creating or overwriting its week file."""
         text = plan.model_dump_json(indent=2)

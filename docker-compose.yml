@@ -37,6 +37,8 @@ services:
       PLM_ROOT_PATH: ${PLM_ROOT_PATH:-}
       # Optional — IANA timezone for "today" / current week (default Europe/Amsterdam).
       PLM_TIMEZONE: ${PLM_TIMEZONE:-}
+      # Optional — secret for the /calendar.ics feed; the feed returns 404 while unset.
+      PLM_ICAL_TOKEN: ${PLM_ICAL_TOKEN:-}
 
   # Remote MCP HTTP server — exposes PLM tools to Claude.ai via OAuth 2.1 (AuthKit).
   # Gated behind the "mcp" profile so it's opt-in: docker compose --profile mcp up -d

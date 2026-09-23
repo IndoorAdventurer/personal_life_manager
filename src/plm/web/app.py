@@ -12,6 +12,7 @@ Environment variables (resolved at startup):
   PLM_ROOT_PATH       — e.g. "/plm" when Caddy reverse-proxies at a subpath (optional)
   PLM_PORT            — listening port (optional, default 2026)
   PLM_TIMEZONE        — IANA zone for "today" / current week (optional, see plm.timeutil)
+  PLM_ICAL_TOKEN      — secret for the /calendar.ics feed (optional; feed disabled if unset)
 """
 
 # ── 1. Imports ──────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from plm.colors import PALETTE, palette_index, project_color
+from plm.ical import build_ics
 from plm.models.card import CardLog, KanbanCard, normalize_tags
 from plm.models.inbox import InboxNote
 from plm.models.planning import Day, TimeBlock, WeeklyPlan
@@ -49,6 +51,7 @@ from plm.timeutil import current_week, today_weekday
 # Captured at module level so routes can reference them without re-reading os.environ.
 _PLM_PASSWORD = os.environ.get("PLM_PASSWORD", "")
 _PLM_SESSION_SECRET = os.environ.get("PLM_SESSION_SECRET", "")
+_PLM_ICAL_TOKEN = os.environ.get("PLM_ICAL_TOKEN", "")
 
 # ── 3. Module-level singletons ──────────────────────────────────────────────
 # store: shared with the MCP server via the same JSON files on disk.
@@ -1466,7 +1469,36 @@ async def profile_update(
     return RedirectResponse(url=str(request.url_for("profile_page")), status_code=303)
 
 
-# ── 7g. SSE live-refresh endpoint (8d) ──────────────────────────────────────
+# ── 7g. ICS calendar feed ────────────────────────────────────────────────────
+
+@app.get("/calendar.ics", name="calendar_feed")
+async def calendar_feed(token: str = "") -> Response:
+    """Subscribable ICS feed of all time blocks from last week onwards.
+
+    No require_auth: calendar apps can't log in or carry the session cookie, so
+    the feed is protected by a secret token in the URL instead.  Unset token or
+    a wrong one both give a plain 404, so the feed's existence isn't revealed.
+    compare_digest avoids leaking the token through response timing.
+    """
+    if not _PLM_ICAL_TOKEN or not hmac.compare_digest(token, _PLM_ICAL_TOKEN):
+        return Response(status_code=404)
+
+    # Last week is kept so the review of the past week can still be seen in the
+    # calendar; older weeks are dropped to keep the feed small.
+    first_week = _week_offset(current_week(), -1)
+    plans = [
+        plan for week in store.list_plan_weeks()
+        if week >= first_week and (plan := store.get_plan(week)) is not None
+    ]
+    # All projects, archived included, so their blocks keep their name.
+    projects = {p.id: p for p in store.list_projects()}
+    return Response(
+        content=build_ics(plans, projects),
+        media_type="text/calendar; charset=utf-8",
+    )
+
+
+# ── 7h. SSE live-refresh endpoint (8d) ──────────────────────────────────────
 
 @app.get("/events", name="sse_events")
 async def sse_events(

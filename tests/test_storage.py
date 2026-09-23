@@ -326,3 +326,15 @@ class TestProfile:
         store.save_profile(BehavioralProfile(content="x"))
         tmp_files = list(tmp_path.glob("*.tmp"))
         assert tmp_files == []
+
+
+class TestListPlanWeeks:
+    def test_empty(self, store: JsonStore):
+        assert store.list_plan_weeks() == []
+
+    def test_sorted_and_skips_stray_files(self, store: JsonStore, tmp_path: Path):
+        for week in ("2026-W10", "2025-W52", "2026-W02"):
+            store.save_plan(WeeklyPlan(week=week))
+        (tmp_path / "planning" / "2026-W11.json.tmp").write_text("{}")
+        (tmp_path / "planning" / "notes.json").write_text("{}")
+        assert store.list_plan_weeks() == ["2025-W52", "2026-W02", "2026-W10"]

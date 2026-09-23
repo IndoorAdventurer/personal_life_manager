@@ -60,6 +60,8 @@ PLM_SESSION_SECRET=use-a-long-random-string-here
 PLM_PORT=2026
 # PLM_DATA_DIR=~/.local/share/plm   # uncomment to override
 # PLM_ROOT_PATH=/plm                 # uncomment if behind a reverse proxy
+# PLM_TIMEZONE=Europe/Amsterdam      # timezone of your time blocks
+# PLM_ICAL_TOKEN=                    # enables the calendar feed (section 8)
 EOF
 
 chmod 600 ~/.config/plm/env   # keep the password secret
@@ -251,6 +253,8 @@ PLM_SESSION_SECRET=use-a-long-random-string-here
 # Optional — uncomment to override defaults:
 # PLM_PORT=2026
 # PLM_ROOT_PATH=/plm
+# PLM_TIMEZONE=Europe/Amsterdam
+# PLM_ICAL_TOKEN=          # enables the calendar feed (section 8)
 ```
 
 Generate a good session secret:
@@ -421,6 +425,51 @@ git pull
 pip3 install --user -e .
 systemctl --user restart plm-web
 ```
+
+---
+
+## 8. Calendar feed (ICS)
+
+`plm-web` serves all time blocks from last week onwards as a subscribable ICS
+feed at `/calendar.ics`. Calendar apps can't log in, so the feed is protected by
+a secret token in the URL instead — treat the URL like a password.
+
+1. Generate a token and add it to your env file (`.env` for Docker,
+   `~/.config/plm/env` for the direct install):
+
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+   ```
+   PLM_ICAL_TOKEN=<the token>
+   PLM_TIMEZONE=Europe/Amsterdam   # optional — the timezone your blocks are in
+   ```
+
+2. Restart the web UI (`docker compose up -d` or `systemctl --user restart plm-web`).
+
+3. Check the feed in a browser — it should download a `.ics` file:
+
+   ```
+   https://your.domain.com/plm/calendar.ics?token=<the token>
+   ```
+
+   (Drop `/plm` if PLM has the whole domain.) A wrong or missing token gives a 404.
+
+4. Subscribe:
+   - **Google Calendar** (web): *Other calendars* → **+** → *From URL* → paste the URL.
+   - **Apple Calendar**: *File* → *New Calendar Subscription*.
+   - **Android**: [ICSx⁵](https://icsx5.bitfire.at/) syncs the feed into the phone's calendar.
+
+Notes:
+
+- Google refreshes subscribed calendars only every ~8–24 hours; Apple and ICSx⁵
+  honour the feed's 1-hour refresh hint.
+- Every event has a reminder at its start and one at its end. Whether they fire
+  depends on the calendar app.
+- All blocks appear in one calendar; per-project colours are sent (`COLOR`), but
+  Google ignores them and uses the calendar's colour.
+- To revoke access, change `PLM_ICAL_TOKEN` and restart — old URLs stop working.
 
 ---
 
